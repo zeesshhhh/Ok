@@ -1003,6 +1003,152 @@ Future<double?> fetchPrice(String sym) async {
   }
 }
 
+
+// ---------- in-app paper trading ----------
+const paperStart = 10000.0;
+const paperRisk = 0.01;      // 1% of the virtual account risked per trade
+const paperCostR = 0.05;     // fees and slippage, same as the bot
+const paperHoldHours = {'1m': 2, '5m': 6, '15m': 12, '30m': 24, '1h': 48, '4h': 120, '1d': 240};
+
+double? cleanNum(double? v) => v == null || v.isNaN || v.isInfinite ? null : v;
+
+class AppTrade {
+  final int id, side, buys, sells, neutrals, mood;
+  final String coin, tf, source, verdict;
+  final double entry, sl, tp, score, riskCash;
+  final double? adx, atrPct;
+  final DateTime opened;
+  String status = 'open', reason = '';
+  double mfe = 0, mae = 0, exitPx = 0, r = 0;
+  bool ambiguous = false;
+  DateTime? closed;
+
+  AppTrade({required this.id, required this.coin, required this.tf, required this.source, required this.verdict,
+      required this.side, required this.buys, required this.sells, required this.neutrals, required this.mood,
+      required this.entry, required this.sl, required this.tp, required this.score, required this.riskCash,
+      required this.adx, required this.atrPct, required this.opened});
+
+  bool get isOpen => status == 'open';
+  double get riskPx => (entry - sl).abs();
+  double get pnl => r * riskCash;
+  double get plannedRr => riskPx == 0 ? 0 : (tp - entry).abs() / riskPx;
+
+  Map<String, dynamic> toJson() => {
+        'id': id, 'coin': coin, 'tf': tf, 'source': source, 'verdict': verdict, 'side': side, 'buys': buys,
+        'sells': sells, 'neutrals': neutrals, 'mood': mood, 'entry': entry, 'sl': sl, 'tp': tp, 'score': score,
+        'risk': riskCash, 'adx': cleanNum(adx), 'atrPct': cleanNum(atrPct), 'opened': opened.toIso8601String(),
+        'status': status, 'reason': reason, 'mfe': mfe, 'mae': mae, 'exit': exitPx, 'r': r, 'amb': ambiguous,
+        'closed': closed?.toIso8601String(),
+      };
+
+  factory AppTrade.fromJson(Map<String, dynamic> j) {
+    final t = AppTrade(
+      id: (j['id'] as num).toInt(), coin: '${j['coin']}', tf: '${j['tf']}', source: '${j['source'] ?? 'scanner'}',
+      verdict: '${j['verdict'] ?? ''}', side: (j['side'] as num).toInt(), buys: (j['buys'] as num?)?.toInt() ?? 0,
+      sells: (j['sells'] as num?)?.toInt() ?? 0, neutrals: (j['neutrals'] as num?)?.toInt() ?? 0,
+      mood: (j['mood'] as num?)?.toInt() ?? 0, entry: num0(j['entry']), sl: num0(j['sl']), tp: num0(j['tp']),
+      score: num0(j['score']), riskCash: num0(j['risk']), adx: (j['adx'] as num?)?.toDouble(),
+      atrPct: (j['atrPct'] as num?)?.toDouble(), opened: DateTime.tryParse('${j['opened']}') ?? DateTime.now(),
+    );
+    t.status = '${j['status'] ?? 'open'}';
+    t.reason = '${j['reason'] ?? ''}';
+    t.mfe = num0(j['mfe']);
+    t.mae = num0(j['mae']);
+    t.exitPx = num0(j['exit']);
+    t.r = num0(j['r']);
+    t.ambiguous = j['amb'] == true;
+    t.closed = j['closed'] == null ? null : DateTime.tryParse('${j['closed']}');
+    return t;
+  }
+}
+
+/// Walks candles after the entry candle. Same-candle SL and TP counts as SL (pessimistic). Returns true if closed.
+bool settleTrade(AppTrade t, List<Candle> cs) {
+  final risk = t.riskPx == 0 ? 1e-12 : t.riskPx;
+  var mfe = t.mfe, mae = t.mae;
+  double? exitPx;
+  var reason = '', amb = false;
+  DateTime? when;
+  for (final c in cs) {
+    if (!c.time.isAfter(t.opened)) continue;
+    final fav = t.side == 1 ? c.high - t.entry : t.entry - c.low;
+    final adv = t.side == 1 ? t.entry - c.low : c.high - t.entry;
+    mfe = math.max(mfe, fav / risk);
+    mae = math.max(mae, adv / risk);
+    final hitSl = t.side == 1 ? c.low <= t.sl : c.high >= t.sl;
+    final hitTp = t.side == 1 ? c.high >= t.tp : c.low <= t.tp;
+    if (hitSl) {
+      exitPx = t.sl; reason = 'SL'; when = c.time; amb = hitTp;
+      break;
+    }
+    if (hitTp) {
+      exitPx = t.tp; reason = 'TP'; when = c.time;
+      break;
+    }
+  }
+  t.mfe = mfe;
+  t.mae = mae;
+  final holdMin = (paperHoldHours[t.tf] ?? 48) * 60;
+  if (exitPx == null && cs.isNotEmpty && DateTime.now().difference(t.opened).inMinutes > holdMin) {
+    exitPx = cs.last.close; reason = 'TIMEOUT'; when = DateTime.now();
+  }
+  if (exitPx == null) return false;
+  t.exitPx = exitPx;
+  t.reason = reason;
+  t.ambiguous = amb;
+  t.closed = when;
+  t.status = 'closed';
+  t.r = (exitPx - t.entry) * t.side / risk - paperCostR;
+  return true;
+}
+
+class PStats {
+  int n = 0, wins = 0, tp = 0, sl = 0, timeouts = 0;
+  double sumR = 0, grossWin = 0, grossLoss = 0;
+  PStats(Iterable<AppTrade> list) {
+    for (final t in list.where((x) => !x.isOpen)) {
+      n++;
+      sumR += t.r;
+      if (t.r > 0) { wins++; grossWin += t.r; } else { grossLoss += -t.r; }
+      if (t.reason == 'TP') tp++;
+      if (t.reason == 'SL') sl++;
+      if (t.reason == 'TIMEOUT') timeouts++;
+    }
+  }
+  double get winPct => n == 0 ? 0 : 100.0 * wins / n;
+  double get avgR => n == 0 ? 0 : sumR / n;
+  double get pf => grossLoss == 0 ? (grossWin > 0 ? 99.0 : 0.0) : grossWin / grossLoss;
+}
+
+String csvCell(dynamic v) {
+  if (v == null) return '';
+  final t = '$v';
+  return t.contains(',') || t.contains('"') || t.contains('\n') ? '"${t.replaceAll('"', '""')}"' : t;
+}
+
+String tradesToCsv(List<AppTrade> trades) {
+  const cols = ['id', 'status', 'opened_utc', 'closed_utc', 'hours_held', 'symbol', 'strategy', 'tf', 'side', 'verdict', 'score',
+    'entry', 'sl', 'tp', 'risk_pct', 'planned_rr', 'exit_price', 'exit_reason', 'same_candle_sl_tp', 'r_multiple', 'pnl_usd',
+    'mfe_r', 'mae_r', 'buys', 'neutrals', 'sells', 'adx', 'atr_pct', 'news_mood', 'hour_utc', 'weekday'];
+  String r(double? v, int n) => v == null ? '' : v.toStringAsFixed(n);
+  final out = StringBuffer(cols.join(',')).toString();
+  final lines = <String>[out];
+  for (final t in trades) {
+    final u = t.opened.toUtc();
+    final done = !t.isOpen;
+    final row = [
+      t.id, t.status, u.toIso8601String(), t.closed?.toUtc().toIso8601String(),
+      done && t.closed != null ? r(t.closed!.difference(t.opened).inMinutes / 60, 2) : '',
+      t.coin, 'App ${t.source}', t.tf, t.side == 1 ? 'BUY' : 'SELL', t.verdict, r(t.score, 3),
+      t.entry, t.sl, t.tp, r(t.entry == 0 ? null : t.riskPx / t.entry * 100, 3), r(t.plannedRr, 2),
+      done ? t.exitPx : '', done ? t.reason : '', done ? t.ambiguous : '', done ? r(t.r, 3) : '', done ? r(t.pnl, 2) : '',
+      r(t.mfe, 2), r(t.mae, 2), t.buys, t.neutrals, t.sells, r(t.adx, 1), r(t.atrPct, 3), t.mood, u.hour, u.weekday,
+    ];
+    lines.add(row.map(csvCell).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
 class SignalApp extends StatelessWidget {
   const SignalApp({super.key});
 
@@ -1071,6 +1217,11 @@ class _HomeState extends State<Home> {
   String? scanError;
   DateTime? scanUpdated;
   Timer? scanTimer;
+  List<AppTrade> trades = [];
+  bool autoPaper = false, paperBusy = false;
+  double paperMinScore = 0.35;
+  int paperMaxOpen = 10;
+  Timer? paperTimer;
 
   @override
   void initState() {
@@ -1087,6 +1238,8 @@ class _HomeState extends State<Home> {
     newsTimer = Timer.periodic(const Duration(minutes: 5), (_) => loadNews());
     loadMtf();
     mtfTimer = Timer.periodic(const Duration(seconds: 30), (_) => loadMtf());
+    loadPaper();
+    paperTimer = Timer.periodic(const Duration(seconds: 60), (_) => checkPaper());
   }
 
   @override
@@ -1097,6 +1250,7 @@ class _HomeState extends State<Home> {
     scanTimer?.cancel();
     newsTimer?.cancel();
     alertTimer?.cancel();
+    paperTimer?.cancel();
     super.dispose();
   }
 
@@ -1165,6 +1319,213 @@ class _HomeState extends State<Home> {
     return out;
   }
 
+  void setAutoScan(bool v) {
+    setState(() => autoScan = v);
+    scanTimer?.cancel();
+    if (v) {
+      runScan();
+      scanTimer = Timer.periodic(const Duration(seconds: 60), (_) => runScan());
+    }
+  }
+
+  // ---------- in-app paper trading ----------
+  Future<void> loadPaper() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final raw = p.getString('app_paper');
+      if (raw != null) {
+        trades = (jsonDecode(raw) as List).map((e) => AppTrade.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+      }
+      autoPaper = p.getBool('app_paper_auto') ?? false;
+      paperMinScore = p.getDouble('app_paper_min') ?? 0.35;
+      paperMaxOpen = p.getInt('app_paper_max') ?? 10;
+    } catch (_) {}
+    if (mounted) setState(() {});
+    if (autoPaper && !autoScan) setAutoScan(true);
+    checkPaper();                 // catches up on candles that formed while the app was closed
+  }
+
+  Future<void> savePaper() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      if (trades.length > 5000) trades = trades.sublist(trades.length - 5000);
+      await p.setString('app_paper', jsonEncode(trades.map((t) => t.toJson()).toList()));
+      await p.setBool('app_paper_auto', autoPaper);
+      await p.setDouble('app_paper_min', paperMinScore);
+      await p.setInt('app_paper_max', paperMaxOpen);
+    } catch (_) {}
+  }
+
+  double get paperEquity => paperStart + trades.where((t) => !t.isOpen).fold(0.0, (a, t) => a + t.pnl);
+
+  AppTrade? openPaperTrade(String coin, String tf, Analysis a, String source) {
+    if (a.side == 0 || a.atr.isNaN || a.atr <= 0) return null;
+    final plan = tradePlan(a);
+    if (plan[2] < 1.2) return null;
+    if (trades.any((t) => t.isOpen && t.coin == coin)) return null;
+    final id = trades.isEmpty ? 1 : trades.map((t) => t.id).reduce(math.max) + 1;
+    final t = AppTrade(
+      id: id, coin: coin, tf: tf, source: source, verdict: a.verdict, side: a.side, buys: a.buys, sells: a.sells,
+      neutrals: a.neutrals, mood: news.isEmpty ? 0 : newsScore(coin), entry: a.last, sl: plan[0], tp: plan[1],
+      score: a.score, riskCash: paperEquity * paperRisk, adx: cleanNum(a.adx),
+      atrPct: a.last == 0 ? null : cleanNum(a.atr / a.last * 100), opened: DateTime.now(),
+    );
+    trades.add(t);
+    return t;
+  }
+
+  Future<void> autoOpenFromScan(List<ScanRow> rows) async {
+    final cand = rows.where((r) => r.a.side != 0 && r.a.score.abs() >= paperMinScore).toList()
+      ..sort((a, b) => b.a.score.abs().compareTo(a.a.score.abs()));
+    var added = 0;
+    for (final r in cand) {
+      if (trades.where((t) => t.isOpen).length >= paperMaxOpen) break;
+      if (eventSoon(r.coin) != null) continue;                       // same news blackout as the Final call
+      final holdH = paperHoldHours[scanTf] ?? 48;
+      final cooldown = trades.any((t) => !t.isOpen && t.coin == r.coin && t.tf == scanTf && t.closed != null &&
+          DateTime.now().difference(t.closed!).inMinutes < holdH * 15);   // wait a quarter of the hold time after a close
+      if (cooldown) continue;
+      if (openPaperTrade(r.coin, scanTf, r.a, 'scanner') != null) added++;
+    }
+    if (added > 0) {
+      await savePaper();
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> checkPaper() async {
+    if (paperBusy) return;
+    final open = trades.where((t) => t.isOpen).toList();
+    if (open.isEmpty) return;
+    paperBusy = true;
+    try {
+      final byCoin = <String, List<AppTrade>>{};
+      for (final t in open) {
+        byCoin.putIfAbsent(t.coin, () => []).add(t);
+      }
+      var closedNow = 0;
+      for (final e in byCoin.entries) {
+        final oldest = e.value.map((t) => t.opened).reduce((a, b) => a.isBefore(b) ? a : b);
+        final age = DateTime.now().difference(oldest);
+        final tf = age.inHours < 20 ? '5m' : age.inDays < 10 ? '1h' : '4h';   // finest candles that still reach back to the entry
+        List<Candle> cs;
+        try {
+          cs = await fetchCandles(e.key, tf);
+        } catch (_) {
+          continue;
+        }
+        for (final t in e.value) {
+          if (settleTrade(t, cs)) closedNow++;
+        }
+      }
+      await savePaper();
+      if (closedNow > 0) toast('$closedNow paper trade${closedNow == 1 ? '' : 's'} closed. See the Paper tab.');
+    } finally {
+      paperBusy = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> setAutoPaper(bool v) async {
+    setState(() => autoPaper = v);
+    await savePaper();
+    if (v && !autoScan) setAutoScan(true);
+    if (v && scanRows.isNotEmpty) await autoOpenFromScan(scanRows);
+  }
+
+  Future<File?> _writeTemp(String name, String text) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      final f = File('${dir.path}/$name');
+      await f.writeAsString(text);
+      return f;
+    } catch (e) {
+      toast('Could not create the file: $e');
+      return null;
+    }
+  }
+
+  Future<void> shareAppLog() async {
+    if (trades.isEmpty) return toast('No in-app paper trades yet.');
+    final f = await _writeTemp('app_paper_trades.csv', tradesToCsv(trades));
+    if (f == null) return;
+    try {
+      await Share.shareXFiles([XFile(f.path, mimeType: 'text/csv')], subject: 'App paper trades log');
+    } catch (e) {
+      toast('Could not share the file: $e');
+    }
+  }
+
+  Future<void> copyAppLog() async {
+    if (trades.isEmpty) return toast('No in-app paper trades yet.');
+    await Clipboard.setData(ClipboardData(text: tradesToCsv(trades)));
+    toast('Copied ${trades.length} trades to the clipboard.');
+  }
+
+  Future<void> shareBothLogs() async {
+    final bot = await fetchPaperCsv();
+    final files = <XFile>[];
+    if (trades.isNotEmpty) {
+      final f = await _writeTemp('app_paper_trades.csv', tradesToCsv(trades));
+      if (f != null) files.add(XFile(f.path, mimeType: 'text/csv'));
+    }
+    if (bot != null) {
+      final f = await _writeTemp('bot_paper_log.csv', bot);
+      if (f != null) files.add(XFile(f.path, mimeType: 'text/csv'));
+    }
+    if (files.isEmpty) return toast('Nothing to share yet.');
+    try {
+      await Share.shareXFiles(files, subject: 'Paper trading logs (app + bot)');
+    } catch (e) {
+      toast('Could not share the files: $e');
+    }
+  }
+
+  Future<void> resetPaper() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset in-app paper trading?'),
+        content: const Text('This deletes every in-app paper trade and resets the account to \$10,000. Download the log first if you want to keep it.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Reset')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      trades = [];
+      await savePaper();
+      if (mounted) setState(() {});
+    }
+  }
+
+  // Best and worst groups with at least 5 closed trades, to point at what to tune.
+  List<String> paperInsights() {
+    final closed = trades.where((t) => !t.isOpen).toList();
+    if (closed.length < 10) return ['Collect at least 10 closed trades before reading anything into the numbers.'];
+    final groups = <String, List<AppTrade>>{};
+    void add(String k, AppTrade t) => groups.putIfAbsent(k, () => []).add(t);
+    for (final t in closed) {
+      add('timeframe ${t.tf}', t);
+      add('${t.side == 1 ? 'BUY' : 'SELL'} trades', t);
+      add(t.score.abs() >= .5 ? 'strong signals (score 0.5+)' : t.score.abs() >= .35 ? 'medium signals (0.35-0.5)' : 'weak signals (0.2-0.35)', t);
+      add(t.adx == null ? 'ADX unknown' : t.adx! >= 25 ? 'trending (ADX 25+)' : t.adx! < 20 ? 'ranging (ADX under 20)' : 'moderate trend (ADX 20-25)', t);
+      add(t.mood >= 2 ? 'bullish news' : t.mood <= -2 ? 'bearish news' : 'mixed news', t);
+    }
+    final list = groups.entries.where((e) => e.value.length >= 5).map((e) => MapEntry(e.key, PStats(e.value))).toList()
+      ..sort((a, b) => b.value.avgR.compareTo(a.value.avgR));
+    if (list.length < 2) return ['Not enough trades per group yet (need 5+).'];
+    String line(MapEntry<String, PStats> e) => '${e.key}: ${e.value.n} trades, ${e.value.winPct.toStringAsFixed(0)}% wins, ${e.value.avgR >= 0 ? '+' : ''}${e.value.avgR.toStringAsFixed(2)}R average';
+    final out = <String>['Best: ${line(list.first)}', 'Worst: ${line(list.last)}'];
+    final mfeLoss = closed.where((t) => t.reason == 'SL' && t.mfe >= 1).length;
+    final slN = closed.where((t) => t.reason == 'SL').length;
+    if (slN >= 5 && mfeLoss / slN >= .3) {
+      out.add('${(100 * mfeLoss / slN).toStringAsFixed(0)}% of stopped trades first moved 1R in your favour. Taking partial profit earlier may help.');
+    }
+    return out;
+  }
+
   Future<void> runScan() async {
     if (scanning) return;
     setState(() { scanning = true; scanError = null; scanProgress = 0; });
@@ -1191,6 +1552,7 @@ class _HomeState extends State<Home> {
       }
       scanRows = rows;
       scanUpdated = DateTime.now();
+      if (autoPaper) await autoOpenFromScan(rows);
     } catch (e) {
       scanError = '$e';
     } finally {
@@ -1661,6 +2023,21 @@ class _HomeState extends State<Home> {
           OutlinedButton.icon(onPressed: () => addAlert(marketSymbol, plan2[1], '$dirName plan: TP2 reached'), icon: const Icon(Icons.add_alert, size: 16), label: const Text('Alert TP2')),
           OutlinedButton.icon(onPressed: () => addAlert(marketSymbol, plan2[0], '$dirName plan: stop loss hit'), icon: const Icon(Icons.add_alert, size: 16), label: const Text('Alert SL')),
         ]),
+      if (plan2 != null)
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: () async {
+              final t = openPaperTrade(marketSymbol, marketInterval, a, 'manual');
+              if (t == null) return toast('Not opened: needs a clear signal, 1.2+ reward to risk and no open trade on this coin.');
+              await savePaper();
+              if (mounted) setState(() {});
+              toast('Paper trade opened: ${t.coin} ${t.side == 1 ? 'BUY' : 'SELL'} at ${fmtPrice(t.entry)}. Track it in the Paper tab.');
+            },
+            icon: const Icon(Icons.science, size: 16),
+            label: const Text('Paper trade this'),
+          ),
+        ),
       Container(
         width: double.infinity,
         padding: const EdgeInsets.all(10),
@@ -1740,14 +2117,7 @@ class _HomeState extends State<Home> {
             ElevatedButton.icon(onPressed: scanning ? null : runScan, icon: const Icon(Icons.radar), label: Text(scanning ? 'Scanning...' : 'Scan now')),
             const SizedBox(width: 12),
             const Text('Auto 60s'),
-            Switch(value: autoScan, onChanged: (v) {
-              setState(() => autoScan = v);
-              scanTimer?.cancel();
-              if (v) {
-                runScan();
-                scanTimer = Timer.periodic(const Duration(seconds: 60), (_) => runScan());
-              }
-            }),
+            Switch(value: autoScan, onChanged: setAutoScan),
           ]),
           if (scanning) LinearProgressIndicator(value: scanProgress == 0 ? null : scanProgress),
           if (scanError != null) Padding(padding: const EdgeInsets.all(8), child: Text(scanError!, style: const TextStyle(color: Colors.orange))),
@@ -2046,6 +2416,144 @@ class _HomeState extends State<Home> {
     ]);
   }
 
+  Widget paperTab() {
+    final open = trades.where((t) => t.isOpen).toList().reversed.toList();
+    final closed = trades.where((t) => !t.isOpen).toList().reversed.toList();
+    final st = PStats(trades);
+    final eq = paperEquity;
+    final pct = (eq / paperStart - 1) * 100;
+    Color rc(double v) => v >= 0 ? Colors.green : Colors.red;
+    String sgn(double v, [int d = 2]) => '${v >= 0 ? '+' : ''}${v.toStringAsFixed(d)}';
+    Widget group(String title, Map<String, List<AppTrade>> g) {
+      final keys = g.keys.toList()..sort((a, b) => g[b]!.length.compareTo(g[a]!.length));
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(padding: const EdgeInsets.fromLTRB(4, 12, 4, 2), child: Text(title, style: const TextStyle(fontWeight: FontWeight.w600))),
+        for (final k in keys.take(8))
+          Builder(builder: (_) {
+            final s = PStats(g[k]!);
+            return ListTile(
+              dense: true,
+              title: Text(k),
+              subtitle: Text('${s.n} trades, ${s.winPct.toStringAsFixed(0)}% wins, PF ${s.pf.toStringAsFixed(2)}'),
+              trailing: Text('${sgn(s.sumR, 1)} R', style: TextStyle(fontWeight: FontWeight.w600, color: rc(s.sumR))),
+            );
+          }),
+      ]);
+    }
+    Map<String, List<AppTrade>> by(String Function(AppTrade) f) {
+      final m = <String, List<AppTrade>>{};
+      for (final t in trades.where((t) => !t.isOpen)) {
+        m.putIfAbsent(f(t), () => []).add(t);
+      }
+      return m;
+    }
+    return ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(12), children: [
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Expanded(child: Text('Auto paper trading', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
+              Switch(value: autoPaper, onChanged: setAutoPaper),
+            ]),
+            Text(autoPaper
+                ? 'ON. Every scan (${scanTf}) opens virtual trades from the Scanner verdicts. Keep the app open: the Scanner auto-scan was turned on for you.'
+                : 'OFF. Turn on to let the app open virtual trades from every Scanner result and track whether they hit target or stop.',
+                style: const TextStyle(fontSize: 12)),
+            const SizedBox(height: 8),
+            const Text('Minimum signal strength', style: TextStyle(fontSize: 12)),
+            Wrap(spacing: 8, children: [
+              for (final o in const {'Any (0.2)': 0.2, 'Medium (0.35)': 0.35, 'Strong (0.5)': 0.5}.entries)
+                ChoiceChip(label: Text(o.key), selected: paperMinScore == o.value, onSelected: (_) { setState(() => paperMinScore = o.value); savePaper(); }),
+            ]),
+            const Text('Max open trades', style: TextStyle(fontSize: 12)),
+            Wrap(spacing: 8, children: [
+              for (final n in [5, 10, 20])
+                ChoiceChip(label: Text('$n'), selected: paperMaxOpen == n, onSelected: (_) { setState(() => paperMaxOpen = n); savePaper(); }),
+            ]),
+            const SizedBox(height: 6),
+            const Text('Stop and target come from the same trade plan shown in Markets. Trades need at least 1.2 reward to risk, one open trade per coin, and none open during a high-impact news window. Same-candle stop and target counts as a loss, and 0.05R is charged for fees.', style: TextStyle(fontSize: 11)),
+          ]),
+        ),
+      ),
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('In-app paper account (virtual money)'),
+            Text('\$${eq.toStringAsFixed(0)}', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w600)),
+            Text('${sgn(pct, 1)}%   ${open.length} open, ${st.n} closed'),
+            if (st.n > 0) ...[
+              const SizedBox(height: 6),
+              Text('Accuracy: ${st.winPct.toStringAsFixed(0)}% win rate (${st.wins} of ${st.n})'),
+              Text('Average ${sgn(st.avgR)}R per trade, profit factor ${st.pf.toStringAsFixed(2)}, total ${sgn(st.sumR, 1)}R'),
+              Text('Hit target ${st.tp}, hit stop ${st.sl}, timed out ${st.timeouts}', style: const TextStyle(fontSize: 12)),
+            ],
+          ]),
+        ),
+      ),
+      if (st.n > 0)
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('What the results say', style: TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 4),
+              for (final line in paperInsights()) Padding(padding: const EdgeInsets.only(top: 3), child: Text('• $line', style: const TextStyle(fontSize: 12))),
+            ]),
+          ),
+        ),
+      if (open.isNotEmpty) ...[
+        const Padding(padding: EdgeInsets.fromLTRB(4, 12, 4, 2), child: Text('Open trades', style: TextStyle(fontWeight: FontWeight.w600))),
+        for (final t in open)
+          ListTile(
+            dense: true,
+            title: Text('${t.coin} ${t.side == 1 ? 'BUY' : 'SELL'} (${t.tf})', style: TextStyle(fontWeight: FontWeight.w600, color: t.side == 1 ? Colors.green : Colors.red)),
+            subtitle: Text('Entry ${fmtPrice(t.entry)}  SL ${fmtPrice(t.sl)}  TP ${fmtPrice(t.tp)}\n${t.verdict}, ${ago(t.opened.toIso8601String())}, best ${t.mfe.toStringAsFixed(1)}R / worst ${t.mae.toStringAsFixed(1)}R'),
+            isThreeLine: true,
+          ),
+      ],
+      if (st.n > 0) ...[
+        group('By timeframe', by((t) => t.tf)),
+        group('By direction', by((t) => t.side == 1 ? 'BUY' : 'SELL')),
+        group('By signal strength', by((t) => t.score.abs() >= .5 ? 'Strong (0.5+)' : t.score.abs() >= .35 ? 'Medium (0.35-0.5)' : 'Weak (0.2-0.35)')),
+        group('By coin', by((t) => t.coin)),
+      ],
+      if (closed.isNotEmpty) ...[
+        const Padding(padding: EdgeInsets.fromLTRB(4, 12, 4, 2), child: Text('Recent closed trades', style: TextStyle(fontWeight: FontWeight.w600))),
+        for (final t in closed.take(25))
+          ListTile(
+            dense: true,
+            title: Text('${t.coin} ${t.side == 1 ? 'BUY' : 'SELL'} (${t.tf})  ${t.reason}${t.ambiguous ? ' *' : ''}'),
+            subtitle: Text('${ago(t.closed?.toIso8601String())}, ${t.verdict}'),
+            trailing: Text('${sgn(t.r)} R', style: TextStyle(fontWeight: FontWeight.w600, color: rc(t.r))),
+          ),
+        const Text('* stop and target were both touched in the same candle, counted as a stop.', style: TextStyle(fontSize: 11)),
+      ],
+      if (trades.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Text('No trades yet. Turn on Auto paper trading, or open a coin in Markets and tap Paper trade.', textAlign: TextAlign.center)),
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Download logs to tune the bot', style: TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            const Text('In-app log: every trade with entry, stop, target, exit and reason, result in R, best and worst move after entry, verdict, score, indicator counts, ADX, ATR %, news mood, hour and weekday. The bot log uses the same column names, so you can compare them.', style: TextStyle(fontSize: 12)),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, children: [
+              ElevatedButton.icon(onPressed: shareAppLog, icon: const Icon(Icons.download), label: const Text('In-app log (CSV)')),
+              OutlinedButton.icon(onPressed: copyAppLog, icon: const Icon(Icons.copy), label: const Text('Copy')),
+              OutlinedButton.icon(onPressed: shareLog, icon: const Icon(Icons.smart_toy), label: const Text('Bot log (CSV)')),
+              OutlinedButton.icon(onPressed: shareBothLogs, icon: const Icon(Icons.folder_zip), label: const Text('Both logs')),
+            ]),
+            const SizedBox(height: 6),
+            Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: trades.isEmpty ? null : resetPaper, icon: const Icon(Icons.delete_outline), label: const Text('Reset in-app paper account'))),
+          ]),
+        ),
+      ),
+      const Padding(padding: EdgeInsets.only(top: 8), child: Text('Trades are opened and checked only while the app is running. When you reopen it, the app replays candles since entry, so stops and targets that were hit meanwhile are still recorded. Virtual money, not financial advice.', style: TextStyle(fontSize: 11))),
+    ]);
+  }
+
   Widget reportTab() {
     if (data == null) return wrap([message(error ?? 'Loading...')]);
     final text = '${data!['report'] ?? ''}';
@@ -2060,7 +2568,7 @@ class _HomeState extends State<Home> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 7,
+      length: 8,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Signal Bot'),
@@ -2080,6 +2588,7 @@ class _HomeState extends State<Home> {
             Tab(text: 'News'),
             Tab(text: 'Alerts'),
             Tab(text: 'Account'),
+            Tab(text: 'Paper'),
             Tab(text: 'Report'),
           ]),
         ),
@@ -2091,7 +2600,7 @@ class _HomeState extends State<Home> {
                 child: Text('Updated ${ago(data!['updated'])}', style: const TextStyle(fontSize: 12)),
               ),
             Expanded(
-              child: TabBarView(children: [marketTab(), scannerTab(), signalsTab(), newsTab(), alertsTab(), accountTab(), reportTab()]),
+              child: TabBarView(children: [marketTab(), scannerTab(), signalsTab(), newsTab(), alertsTab(), accountTab(), paperTab(), reportTab()]),
             ),
             const Padding(
               padding: EdgeInsets.all(6),
