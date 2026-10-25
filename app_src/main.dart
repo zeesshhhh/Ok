@@ -1,12 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'dart:math' as math;
 
 const feedUrl = String.fromEnvironment('FEED_URL');
 
-void main() => runApp(const SignalApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const SignalApp());
+}
 
 double num0(dynamic v) => (v as num?)?.toDouble() ?? 0;
 
@@ -155,6 +161,16 @@ List<List<double>> srLevels(List<double> h, List<double> l, double last, double 
   return lv;
 }
 
+double wmaAt(List<double> v, int end, int p) {
+  var acc = 0.0, den = 0.0;
+  for (var k = 0; k < p; k++) {
+    final w = (p - k).toDouble();
+    acc += w * v[end - k];
+    den += w;
+  }
+  return acc / den;
+}
+
 List<double> rsiSeries(List<double> c, int n) {
   final up = <double>[0], dn = <double>[0];
   for (var i = 1; i < c.length; i++) {
@@ -225,13 +241,13 @@ Analysis analyze(List<Candle> cs, int d) {
   var adxV = double.nan;
 
   // ---- trend / moving averages
-  for (final p in [9, 20, 50, 200]) {
+  for (final p in [10, 20, 30, 50, 100, 200]) {
     if (n >= p) {
       final e = emaSeries(c, p).last;
       ma.add(Reading('EMA $p', f(e), last > e ? 1 : -1));
     }
   }
-  for (final p in [20, 50, 200]) {
+  for (final p in [10, 20, 30, 50, 100, 200]) {
     final sm = smaLast(c, p);
     if (!sm.isNaN) ma.add(Reading('SMA $p', f(sm), last > sm ? 1 : -1));
   }
@@ -457,6 +473,152 @@ Analysis analyze(List<Candle> cs, int d) {
     }
     final cmf = vs == 0 ? 0.0 : mfv / vs;
     osc.add(Reading('Chaikin Money Flow (20)', cmf.toStringAsFixed(2), cmf > 0.05 ? 1 : cmf < -0.05 ? -1 : 0));
+  }
+
+  // ---- more TradingView-style indicators
+  if (hasVol && n >= 20) {
+    var pv = 0.0, vv = 0.0;
+    for (var i = n - 20; i < n; i++) {
+      pv += c[i] * v[i];
+      vv += v[i];
+    }
+    final vw = pv / vv;
+    ma.add(Reading('VWMA (20)', f(vw), last > vw ? 1 : -1));
+  }
+  if (hasVol && n >= 23) {
+    var sv = 0.0;
+    for (var i = n - 22; i <= n - 3; i++) {
+      sv += v[i];
+    }
+    final avgV = sv / 20;
+    if (avgV > 0) info.add(Reading('Last closed candle volume', '${(v[n - 2] / avgV).toStringAsFixed(2)}x average', 0));
+  }
+  if (n >= 12) {
+    final dd = <double>[for (var i = n - 3; i < n; i++) 2 * wmaAt(c, i, 4) - wmaAt(c, i, 9)];
+    final hma = wmaAt(dd, 2, 3);
+    ma.add(Reading('Hull MA (9)', f(hma), last > hma ? 1 : -1));
+  }
+  if (n >= 60) {
+    final t3 = emaSeries(emaSeries(emaSeries(c, 15), 15), 15);
+    final tx = (t3[n - 1] - t3[n - 2]) / t3[n - 2] * 100;
+    osc.add(Reading('TRIX (15)', tx.toStringAsFixed(4), tx > 0 ? 1 : tx < 0 ? -1 : 0));
+  }
+  if (n > 13) {
+    final roc = (last - c[n - 13]) / c[n - 13] * 100;
+    osc.add(Reading('ROC (12)', '${roc.toStringAsFixed(2)}%', roc > 0 ? 1 : roc < 0 ? -1 : 0));
+  }
+  if (n > 15) {
+    var vmp = 0.0, vmm = 0.0, trs = 0.0;
+    for (var i = n - 14; i < n; i++) {
+      vmp += (h[i] - l[i - 1]).abs();
+      vmm += (l[i] - h[i - 1]).abs();
+      trs += math.max(h[i] - l[i], math.max((h[i] - c[i - 1]).abs(), (l[i] - c[i - 1]).abs()));
+    }
+    final viP = trs == 0 ? 1.0 : vmp / trs, viM = trs == 0 ? 1.0 : vmm / trs;
+    osc.add(Reading('Vortex (14)', '+${viP.toStringAsFixed(2)} / -${viM.toStringAsFixed(2)}', viP - viM > 0.05 ? 1 : viP - viM < -0.05 ? -1 : 0));
+  }
+  if (n >= 25) {
+    double hMax(int e, int p) {
+      var m = -1e300;
+      for (var j = e - p + 1; j <= e; j++) {
+        if (h[j] > m) m = h[j];
+      }
+      return m;
+    }
+    double lMin(int e, int p) {
+      var m = 1e300;
+      for (var j = e - p + 1; j <= e; j++) {
+        if (l[j] < m) m = l[j];
+      }
+      return m;
+    }
+    double momAt(int e) {
+      final mid = (hMax(e, 20) + lMin(e, 20)) / 2;
+      var sm = 0.0;
+      for (var j = e - 19; j <= e; j++) {
+        sm += c[j];
+      }
+      return c[e] - (mid + sm / 20) / 2;
+    }
+    final m1 = momAt(n - 1), m0 = momAt(n - 2);
+    final mean20 = smaLast(c, 20);
+    var sq = 0.0;
+    for (var j = n - 20; j < n; j++) {
+      sq += (c[j] - mean20) * (c[j] - mean20);
+    }
+    final sd = math.sqrt(sq / 20);
+    final a20 = wilder(trSeries(h, l, c), 20).last;
+    final sqOn = 2 * sd < 1.5 * a20;
+    osc.add(Reading('Squeeze Momentum', '${sqOn ? 'Squeeze ON' : 'Squeeze OFF'}, momentum ${m1 > m0 ? 'rising' : 'falling'}',
+        m1 > 0 && m1 > m0 ? 1 : m1 < 0 && m1 < m0 ? -1 : 0));
+  }
+  if (n >= 10) {
+    var hao = (cs[0].open + c[0]) / 2;
+    var hac = (cs[0].open + h[0] + l[0] + c[0]) / 4;
+    final bullHa = <bool>[hac > hao];
+    for (var i = 1; i < n; i++) {
+      final nc = (cs[i].open + h[i] + l[i] + c[i]) / 4;
+      final no = (hao + hac) / 2;
+      hao = no;
+      hac = nc;
+      bullHa.add(hac > hao);
+    }
+    final b3 = bullHa[n - 1] && bullHa[n - 2] && bullHa[n - 3];
+    final s3 = !bullHa[n - 1] && !bullHa[n - 2] && !bullHa[n - 3];
+    osc.add(Reading('Heikin-Ashi trend', b3 ? 'Bullish (3 candles)' : s3 ? 'Bearish (3 candles)' : 'Mixed', b3 ? 1 : s3 ? -1 : 0));
+  }
+  if (n >= 40) {
+    final atr22 = wilder(trSeries(h, l, c), 22);
+    var dirC = 1;
+    var pls = double.nan, pss = double.nan;
+    for (var i = 21; i < n; i++) {
+      var hh = -1e300, ll = 1e300;
+      for (var j = i - 21; j <= i; j++) {
+        if (h[j] > hh) hh = h[j];
+        if (l[j] < ll) ll = l[j];
+      }
+      final lsv = hh - 3 * atr22[i], ssv = ll + 3 * atr22[i];
+      if (!pss.isNaN) {
+        if (c[i] > pss) {
+          dirC = 1;
+        } else if (c[i] < pls) {
+          dirC = -1;
+        }
+      }
+      pls = lsv;
+      pss = ssv;
+    }
+    osc.add(Reading('Chandelier Exit (22,3)', dirC == 1 ? 'Long' : 'Short', dirC));
+  }
+  if (n >= 50) {
+    const win = 50;
+    var sx = 0.0, sy = 0.0;
+    for (var k = 0; k < win; k++) {
+      sx += k;
+      sy += c[n - win + k];
+    }
+    final mx = sx / win, my = sy / win;
+    var sxy = 0.0, sxx = 0.0, syy = 0.0;
+    for (var k = 0; k < win; k++) {
+      final dx = k - mx, dy = c[n - win + k] - my;
+      sxy += dx * dy;
+      sxx += dx * dx;
+      syy += dy * dy;
+    }
+    final slope = sxx == 0 ? 0.0 : sxy / sxx;
+    final r2 = syy == 0 || sxx == 0 ? 0.0 : sxy * sxy / (sxx * syy);
+    final pct = my == 0 ? 0.0 : slope * win / my * 100;
+    osc.add(Reading('Linear regression (50)', '${pct.toStringAsFixed(1)}% over 50 bars, R2 ${r2.toStringAsFixed(2)}', r2 > 0.5 ? (slope > 0 ? 1 : -1) : 0));
+  }
+  if (n >= 30) {
+    final w = math.min(n, 100);
+    var hiF = -1e300, loF = 1e300;
+    for (var j = n - w; j < n; j++) {
+      if (h[j] > hiF) hiF = h[j];
+      if (l[j] < loF) loF = l[j];
+    }
+    final rg = hiF - loF;
+    info.add(Reading('Fib 38.2 / 50 / 61.8 (100 bars)', '${f(hiF - 0.382 * rg)} / ${f(hiF - 0.5 * rg)} / ${f(hiF - 0.618 * rg)}', 0));
   }
 
   // ---- info
@@ -781,6 +943,63 @@ List<double> tradePlan(Analysis a) {
   return [sl, tp, risk == 0 ? 0.0 : (tp - a.last).abs() / risk];
 }
 
+
+// ---------- custom price alerts ----------
+class PriceAlert {
+  final int id;
+  final String sym, note;
+  final double price;
+  final bool above; // true: notify when price rises to the target, false: when it falls to it
+  bool done;
+  DateTime? firedAt;
+  PriceAlert(this.id, this.sym, this.price, this.above, this.note, {this.done = false, this.firedAt});
+  Map<String, dynamic> toJson() => {'id': id, 'sym': sym, 'price': price, 'above': above, 'note': note, 'done': done, 'fired': firedAt?.toIso8601String()};
+  factory PriceAlert.fromJson(Map<String, dynamic> j) => PriceAlert(
+        (j['id'] as num).toInt(), '${j['sym']}', (j['price'] as num).toDouble(), j['above'] == true, '${j['note'] ?? ''}',
+        done: j['done'] == true, firedAt: j['fired'] == null ? null : DateTime.tryParse('${j['fired']}'));
+}
+
+final FlutterLocalNotificationsPlugin notifier = FlutterLocalNotificationsPlugin();
+
+Future<void> initNotifications() async {
+  try {
+    const init = InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher'));
+    await notifier.initialize(init);
+    await notifier.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()?.requestNotificationsPermission();
+  } catch (_) {}
+}
+
+Future<void> notify(int id, String title, String body) async {
+  try {
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails('price_alerts', 'Price alerts',
+          channelDescription: 'Tells you when a price you chose is reached', importance: Importance.max, priority: Priority.high, playSound: true, enableVibration: true),
+    );
+    await notifier.show(id, title, body, details);
+  } catch (_) {}
+}
+
+Future<double?> fetchPrice(String sym) async {
+  try {
+    if (!yahooPairs.containsKey(sym)) {
+      final pair = futSymbols[sym] ?? '${sym}USDT';
+      var r = await http.get(Uri.https('fapi.binance.com', '/fapi/v1/ticker/price', {'symbol': pair})).timeout(const Duration(seconds: 10));
+      if (r.statusCode != 200) {
+        r = await http.get(Uri.https('api.binance.com', '/api/v3/ticker/price', {'symbol': pair})).timeout(const Duration(seconds: 10));
+      }
+      if (r.statusCode != 200) return null;
+      return double.parse('${jsonDecode(r.body)['price']}');
+    }
+    final r = await http
+        .get(Uri.https('query1.finance.yahoo.com', '/v8/finance/chart/${yahooPairs[sym]}', {'range': '1d', 'interval': '5m'}), headers: {'User-Agent': 'Mozilla/5.0'})
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) return null;
+    return (jsonDecode(r.body)['chart']['result'][0]['meta']['regularMarketPrice'] as num).toDouble();
+  } catch (_) {
+    return null;
+  }
+}
+
 class SignalApp extends StatelessWidget {
   const SignalApp({super.key});
 
@@ -825,6 +1044,10 @@ class _HomeState extends State<Home> {
   bool mtfBusy = false;
   Timer? mtfTimer;
   String tfFilter = 'All';
+  List<PriceAlert> alerts = [];
+  bool alertBusy = false;
+  final Map<String, DateTime> alertChecked = {};
+  Timer? alertTimer;
   List<NewsItem> news = [];
   List<EconEvent> events = [];
   Map<String, dynamic>? fng;
@@ -854,6 +1077,9 @@ class _HomeState extends State<Home> {
     loadMarket();
     marketTimer = Timer.periodic(const Duration(seconds: 1), (_) => loadMarket(silent: true));
     loadFutures();
+    loadAlerts();
+    initNotifications();
+    alertTimer = Timer.periodic(const Duration(seconds: 5), (_) => checkAlerts());
     loadNews();
     newsTimer = Timer.periodic(const Duration(minutes: 5), (_) => loadNews());
     loadMtf();
@@ -867,6 +1093,7 @@ class _HomeState extends State<Home> {
     mtfTimer?.cancel();
     scanTimer?.cancel();
     newsTimer?.cancel();
+    alertTimer?.cancel();
     super.dispose();
   }
 
@@ -1070,6 +1297,111 @@ class _HomeState extends State<Home> {
     return null;
   }
 
+  void toast(String m) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
+  Future<void> loadAlerts() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final raw = p.getString('alerts');
+      if (raw != null) {
+        alerts = (jsonDecode(raw) as List).map((e) => PriceAlert.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+      }
+    } catch (_) {}
+    if (mounted) setState(() {});
+  }
+
+  Future<void> saveAlerts() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString('alerts', jsonEncode(alerts.map((a) => a.toJson()).toList()));
+    } catch (_) {}
+  }
+
+  Future<void> addAlert(String sym, double target, String note) async {
+    final cur = latestPrices[sym] ?? await fetchPrice(sym);
+    if (cur == null) {
+      toast('Could not read the current $sym price. Try again in a moment.');
+      return;
+    }
+    if ((target - cur).abs() < 1e-12) {
+      toast('The target is the same as the current price.');
+      return;
+    }
+    alerts.add(PriceAlert(DateTime.now().millisecondsSinceEpoch % 2000000000, sym, target, target > cur, note));
+    await saveAlerts();
+    if (mounted) setState(() {});
+    toast('Alert set: $sym ${target > cur ? 'rises to' : 'falls to'} ${fmtPrice(target)}');
+  }
+
+  Future<void> checkAlerts() async {
+    if (alertBusy) return;
+    final active = alerts.where((a) => !a.done).toList();
+    if (active.isEmpty) return;
+    alertBusy = true;
+    try {
+      var changed = false;
+      for (final sym in active.map((a) => a.sym).toSet()) {
+        if (yahooPairs.containsKey(sym)) {
+          final last = alertChecked[sym];
+          if (last != null && DateTime.now().difference(last).inSeconds < 15) continue;
+          alertChecked[sym] = DateTime.now();
+        }
+        final px = await fetchPrice(sym);
+        if (px == null) continue;
+        latestPrices[sym] = px;
+        for (final a in active.where((x) => x.sym == sym)) {
+          if ((a.above && px >= a.price) || (!a.above && px <= a.price)) {
+            a.done = true;
+            a.firedAt = DateTime.now();
+            changed = true;
+            final msg = '${a.sym} ${a.above ? 'rose to' : 'fell to'} ${fmtPrice(px)} (your alert ${fmtPrice(a.price)})${a.note.isEmpty ? '' : '. ${a.note}'}';
+            await notify(a.id, 'Price alert: ${a.sym}', msg);
+            HapticFeedback.heavyImpact();
+            SystemSound.play(SystemSoundType.alert);
+            toast(msg);
+          }
+        }
+      }
+      if (changed) {
+        await saveAlerts();
+      }
+      if (mounted) setState(() {});
+    } finally {
+      alertBusy = false;
+    }
+  }
+
+  Future<void> alertDialog({double? preset, String note = ''}) async {
+    final cur = latestPrices[marketSymbol];
+    final priceCtl = TextEditingController(text: preset != null ? fmtPrice(preset) : (cur == null ? '' : fmtPrice(cur)));
+    final noteCtl = TextEditingController(text: note);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Price alert: $marketSymbol'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(cur == null ? 'Current price unavailable' : 'Current price ${fmtPrice(cur)}'),
+          TextField(controller: priceCtl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Notify me when price reaches')),
+          TextField(controller: noteCtl, decoration: const InputDecoration(labelText: 'Note (optional)')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Set alert')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      final v = double.tryParse(priceCtl.text.trim().replaceAll(',', '.'));
+      if (v == null || v <= 0) {
+        toast('Enter a valid price.');
+      } else {
+        await addAlert(marketSymbol, v, noteCtl.text.trim());
+      }
+    }
+  }
+
   Future<void> loadMtf() async {
     if (mtfBusy) return;
     mtfBusy = true;
@@ -1140,6 +1472,7 @@ class _HomeState extends State<Home> {
     bool isOpen(Map<String,dynamic> x) { final a=x['start'] as int, b=x['end'] as int; return a < b ? nowMin >= a && nowMin < b : nowMin >= a || nowMin < b; }
     return RefreshIndicator(onRefresh: loadMarket, child: ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(12), children: [
       Wrap(spacing: 8, runSpacing: 4, children: [
+        ActionChip(avatar: const Icon(Icons.add_alert, size: 18), label: const Text('Set price alert'), onPressed: () => alertDialog()),
         ActionChip(avatar: const Icon(Icons.search, size: 18), label: Text(futSymbols.isEmpty ? 'All futures coins' : 'All coins (${futSymbols.length})'), onPressed: pickCoin),
         for (final a in {...favorites, marketSymbol}) ChoiceChip(label: Text(a), selected: marketSymbol == a, onSelected: (_) { setState(() { marketSymbol = a; mtf = {}; }); loadMarket(); loadMtf(); }),
       ]),
@@ -1306,14 +1639,25 @@ class _HomeState extends State<Home> {
     final col = a.side == 1 ? Colors.green : a.side == -1 ? Colors.red : Colors.grey;
     String f(double v) => v.isNaN || v.isInfinite ? 'N/A' : v.toStringAsFixed(d);
     String plan;
+    List<double>? tpl;
+    var tp1 = 0.0;
     if (a.side == 0 || a.atr.isNaN) {
       plan = 'No clear trade: indicators are mixed';
     } else {
-      final tp = tradePlan(a);
-      plan = '${a.side == 1 ? 'BUY' : 'SELL'} ${f(a.last)} | SL ${f(tp[0])} | TP ${f(tp[1])} | R:R 1:${tp[2].toStringAsFixed(1)}';
+      tpl = tradePlan(a);
+      tp1 = a.last + a.side * (a.last - tpl[0]).abs();
+      plan = '${a.side == 1 ? 'BUY' : 'SELL'} ${f(a.last)} | SL ${f(tpl[0])} | TP1 ${f(tp1)} (1R) | TP2 ${f(tpl[1])} | R:R 1:${tpl[2].toStringAsFixed(1)}';
     }
+    final plan2 = tpl;
+    final dirName = a.side == 1 ? 'BUY' : 'SELL';
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _finalCall(a),
+      if (plan2 != null)
+        Wrap(spacing: 8, children: [
+          OutlinedButton.icon(onPressed: () => addAlert(marketSymbol, tp1, '$dirName plan: TP1 reached'), icon: const Icon(Icons.add_alert, size: 16), label: const Text('Alert TP1')),
+          OutlinedButton.icon(onPressed: () => addAlert(marketSymbol, plan2[1], '$dirName plan: TP2 reached'), icon: const Icon(Icons.add_alert, size: 16), label: const Text('Alert TP2')),
+          OutlinedButton.icon(onPressed: () => addAlert(marketSymbol, plan2[0], '$dirName plan: stop loss hit'), icon: const Icon(Icons.add_alert, size: 16), label: const Text('Alert SL')),
+        ]),
       Container(
         width: double.infinity,
         padding: const EdgeInsets.all(10),
@@ -1425,7 +1769,7 @@ class _HomeState extends State<Home> {
               subtitle: Text('24h ${r.change >= 0 ? '+' : ''}${r.change.toStringAsFixed(1)}%  |  Buy ${r.a.buys} / Neutral ${r.a.neutrals} / Sell ${r.a.sells}'),
               trailing: Text(r.a.verdict, style: TextStyle(fontWeight: FontWeight.bold, color: col(r.a.side))),
             ),
-          const Padding(padding: EdgeInsets.only(top: 8), child: Text('Verdicts come from about 21 indicators on the loaded candles. Not a guaranteed signal. Tap a coin to open its chart.', style: TextStyle(fontSize: 11))),
+          const Padding(padding: EdgeInsets.only(top: 8), child: Text('Verdicts come from about 45 indicators on the loaded candles. Not a guaranteed signal. Tap a coin to open its chart.', style: TextStyle(fontSize: 11))),
         ]),
       );
     });
@@ -1481,6 +1825,49 @@ class _HomeState extends State<Home> {
         const Padding(padding: EdgeInsets.only(top: 8), child: Text('Headline sentiment is a simple keyword count, so treat it as a hint, not a verdict.', style: TextStyle(fontSize: 11))),
       ]),
     );
+  }
+
+  Widget alertsTab() {
+    final active = alerts.where((a) => !a.done).toList();
+    final done = alerts.where((a) => a.done).toList().reversed.toList();
+    String away(PriceAlert a) {
+      final px = latestPrices[a.sym];
+      if (px == null) return 'waiting for price';
+      return '${((a.price - px) / px * 100).toStringAsFixed(2)}% away (now ${fmtPrice(px)})';
+    }
+    return ListView(padding: const EdgeInsets.all(12), children: [
+      Text('Price alerts', style: Theme.of(context).textTheme.titleMedium),
+      const Text('Pick a price and the app notifies you when it is reached. Prices are checked every 5 seconds (15 seconds for gold, forex and oil) while the app is running, including in the background for a while. Android can pause the app when it is fully closed or in battery saver, so keep it open for important levels. Allow notifications when asked, and exclude the app from battery optimization in Android settings.', style: TextStyle(fontSize: 12)),
+      const SizedBox(height: 8),
+      ElevatedButton.icon(onPressed: () => alertDialog(), icon: const Icon(Icons.add_alert), label: Text('New alert for $marketSymbol')),
+      const Text('Change the coin in the Markets tab. In Markets you can also tap Alert TP1, TP2 or SL under the Final call.', style: TextStyle(fontSize: 11)),
+      const SizedBox(height: 8),
+      Text('Active (${active.length})', style: const TextStyle(fontWeight: FontWeight.w700)),
+      if (active.isEmpty) const Text('No active alerts.'),
+      for (final a in active)
+        ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(a.above ? Icons.trending_up : Icons.trending_down, color: a.above ? Colors.green : Colors.red),
+          title: Text('${a.sym} ${a.above ? 'rises to' : 'falls to'} ${fmtPrice(a.price)}'),
+          subtitle: Text('${away(a)}${a.note.isEmpty ? '' : '\n${a.note}'}'),
+          trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () { setState(() => alerts.remove(a)); saveAlerts(); }),
+        ),
+      const SizedBox(height: 8),
+      Text('Triggered (${done.length})', style: const TextStyle(fontWeight: FontWeight.w700)),
+      for (final a in done)
+        ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.check_circle, color: Colors.green),
+          title: Text('${a.sym} ${a.above ? 'reached' : 'dropped to'} ${fmtPrice(a.price)}'),
+          subtitle: Text('${a.firedAt == null ? '' : ago(a.firedAt!.toIso8601String())}${a.note.isEmpty ? '' : '  |  ${a.note}'}'),
+          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+            IconButton(icon: const Icon(Icons.replay), tooltip: 'Set again', onPressed: () { setState(() => alerts.remove(a)); addAlert(a.sym, a.price, a.note); }),
+            IconButton(icon: const Icon(Icons.delete_outline), onPressed: () { setState(() => alerts.remove(a)); saveAlerts(); }),
+          ]),
+        ),
+    ]);
   }
 
   Widget signalsTab() {
@@ -1614,7 +2001,7 @@ class _HomeState extends State<Home> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 6,
+      length: 7,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Signal Bot'),
@@ -1632,6 +2019,7 @@ class _HomeState extends State<Home> {
             Tab(text: 'Scanner'),
             Tab(text: 'Signals'),
             Tab(text: 'News'),
+            Tab(text: 'Alerts'),
             Tab(text: 'Account'),
             Tab(text: 'Report'),
           ]),
@@ -1644,7 +2032,7 @@ class _HomeState extends State<Home> {
                 child: Text('Updated ${ago(data!['updated'])}', style: const TextStyle(fontSize: 12)),
               ),
             Expanded(
-              child: TabBarView(children: [marketTab(), scannerTab(), signalsTab(), newsTab(), accountTab(), reportTab()]),
+              child: TabBarView(children: [marketTab(), scannerTab(), signalsTab(), newsTab(), alertsTab(), accountTab(), reportTab()]),
             ),
             const Padding(
               padding: EdgeInsets.all(6),
