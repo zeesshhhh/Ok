@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show File;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 import 'dart:math' as math;
 
@@ -1945,10 +1948,65 @@ class _HomeState extends State<Home> {
     );
   }
 
+  Future<String?> fetchPaperCsv() async {
+    try {
+      final url = feedUrl.replaceAll('feed.json', 'paper_log.csv');
+      final r = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+      if (r.statusCode != 200) {
+        toast('Log not found yet (HTTP ${r.statusCode}). It appears after the updated bot has run once and closed a trade.');
+        return null;
+      }
+      return utf8.decode(r.bodyBytes);
+    } catch (e) {
+      toast('Could not download the log: $e');
+      return null;
+    }
+  }
+
+  Future<void> shareLog() async {
+    final csv = await fetchPaperCsv();
+    if (csv == null) return;
+    try {
+      final dir = await getTemporaryDirectory();
+      final f = File('${dir.path}/paper_trading_log.csv');
+      await f.writeAsString(csv);
+      await Share.shareXFiles([XFile(f.path, mimeType: 'text/csv')], subject: 'Paper trading log');
+    } catch (e) {
+      toast('Could not share the file: $e');
+    }
+  }
+
+  Future<void> copyLog() async {
+    final csv = await fetchPaperCsv();
+    if (csv == null) return;
+    await Clipboard.setData(ClipboardData(text: csv));
+    toast('Copied ${csv.trim().split('\n').length - 1} trades to the clipboard. Paste them into a chat or note.');
+  }
+
+  Widget exportCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Paper trading log', style: TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          const Text('Every virtual trade as a CSV file: entry, stop, target, exit and reason, result in R, best and worst move after entry, plus ADX, RSI, news mood, 4h trend, hour and weekday at the time of the signal. Send it to tune the bot.', style: TextStyle(fontSize: 12)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, children: [
+            ElevatedButton.icon(onPressed: shareLog, icon: const Icon(Icons.download), label: const Text('Download / share CSV')),
+            OutlinedButton.icon(onPressed: copyLog, icon: const Icon(Icons.copy), label: const Text('Copy to clipboard')),
+          ]),
+          const SizedBox(height: 6),
+          const Text('Also available in your GitHub repo at docs/paper_log.csv (open the file, then Download raw file).', style: TextStyle(fontSize: 11)),
+        ]),
+      ),
+    );
+  }
+
   Widget accountTab() {
     if (data == null) return wrap([message(error ?? 'Loading...')]);
     final p = (data!['paper'] as Map?)?.cast<String, dynamic>() ?? {};
-    if (p.isEmpty) return wrap([message('Paper account starts after the first signal.')]);
+    if (p.isEmpty) return wrap([message('Paper account starts after the first signal.'), exportCard()]);
     final eq = num0(p['equity']);
     final start = num0(p['start']);
     final pct = start > 0 ? (eq / start - 1) * 100 : 0;
@@ -1984,6 +2042,7 @@ class _HomeState extends State<Home> {
                   fontWeight: FontWeight.w600,
                   color: num0(s['r']) >= 0 ? Colors.green : Colors.red)),
         ),
+      exportCard(),
     ]);
   }
 
