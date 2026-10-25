@@ -64,18 +64,19 @@ class ScanRow {
 class Reading {
   final String name, value;
   final int sig; // 1 buy, -1 sell, 0 neutral
-  const Reading(this.name, this.value, this.sig);
+  final bool mr; // mean-reversion oscillator (trusted more in ranges, less in strong trends)
+  const Reading(this.name, this.value, this.sig, [this.mr = false]);
 }
 
 class Analysis {
   final List<Reading> ma, osc, info;
   final int buys, sells, neutrals;
-  final double last, atr;
-  Analysis(this.ma, this.osc, this.info, this.buys, this.sells, this.neutrals, this.last, this.atr);
+  final double last, atr, adx, score;
+  final List<double> sup, res;   // nearest support / resistance levels found on the chart (nearest first)
+  Analysis(this.ma, this.osc, this.info, this.buys, this.sells, this.neutrals, this.last, this.atr, this.adx, this.score, this.sup, this.res);
   int get total => buys + sells + neutrals;
-  double get score => total == 0 ? 0 : (buys - sells) / total;
-  int get side => score >= .15 ? 1 : score <= -.15 ? -1 : 0;
-  String get verdict => score >= .5 ? 'STRONG BUY' : score >= .15 ? 'BUY' : score <= -.5 ? 'STRONG SELL' : score <= -.15 ? 'SELL' : 'NEUTRAL';
+  int get side => score >= .2 ? 1 : score <= -.2 ? -1 : 0;
+  String get verdict => score >= .5 ? 'STRONG BUY' : score >= .2 ? 'BUY' : score <= -.5 ? 'STRONG SELL' : score <= -.2 ? 'SELL' : 'NEUTRAL';
 }
 
 List<double> emaSeries(List<double> v, int n) {
@@ -124,6 +125,45 @@ double rsiLast(List<double> c, int n) {
   }
   final u = wilder(up, n).last, dd = wilder(dn, n).last;
   return dd == 0 ? 100 : 100 - 100 / (1 + u / dd);
+}
+
+// Swing-high / swing-low clustering: returns [price, touches] pairs, ascending by price.
+List<List<double>> srLevels(List<double> h, List<double> l, double last, double atr) {
+  final n = h.length;
+  final piv = <double>[];
+  for (var i = 3; i < n - 3; i++) {
+    var isH = true, isL = true;
+    for (var j = 1; j <= 3; j++) {
+      if (h[i] <= h[i - j] || h[i] <= h[i + j]) isH = false;
+      if (l[i] >= l[i - j] || l[i] >= l[i + j]) isL = false;
+    }
+    if (isH) piv.add(h[i]);
+    if (isL) piv.add(l[i]);
+  }
+  piv.sort();
+  final tol = atr.isNaN || atr <= 0 ? last * 0.002 : atr * 0.5;
+  final lv = <List<double>>[];
+  for (final p in piv) {
+    if (lv.isNotEmpty && (p - lv.last[0]).abs() <= tol) {
+      final k = lv.last[1];
+      lv.last[0] = (lv.last[0] * k + p) / (k + 1);
+      lv.last[1] = k + 1;
+    } else {
+      lv.add([p, 1.0]);
+    }
+  }
+  return lv;
+}
+
+List<double> rsiSeries(List<double> c, int n) {
+  final up = <double>[0], dn = <double>[0];
+  for (var i = 1; i < c.length; i++) {
+    final d = c[i] - c[i - 1];
+    up.add(d > 0 ? d : 0);
+    dn.add(d < 0 ? -d : 0);
+  }
+  final u = wilder(up, n), w = wilder(dn, n);
+  return [for (var i = 0; i < c.length; i++) w[i] == 0 ? 100.0 : 100 - 100 / (1 + u[i] / w[i])];
 }
 
 List<double> adxCalc(List<double> h, List<double> l, List<double> c, int n) {
@@ -182,6 +222,7 @@ Analysis analyze(List<Candle> cs, int d) {
   final last = c.last;
   final hasVol = v.skip(math.max(0, n - 50)).fold<double>(0, (a, b) => a + b) > 0;
   final ma = <Reading>[], osc = <Reading>[], info = <Reading>[];
+  var adxV = double.nan;
 
   // ---- trend / moving averages
   for (final p in [9, 20, 50, 200]) {
@@ -208,7 +249,7 @@ Analysis analyze(List<Candle> cs, int d) {
 
   // ---- oscillators
   final rsi = rsiLast(c, 14);
-  osc.add(Reading('RSI (14)', f1(rsi), rsi < 30 ? 1 : rsi > 70 ? -1 : 0));
+  osc.add(Reading('RSI (14)', f1(rsi), rsi < 30 ? 1 : rsi > 70 ? -1 : 0, true));
 
   double kAt(int i) {
     var hh = -1e300, ll = 1e300;
@@ -220,7 +261,7 @@ Analysis analyze(List<Candle> cs, int d) {
   }
   if (n >= 16) {
     final k = kAt(n - 1), dd = (kAt(n - 1) + kAt(n - 2) + kAt(n - 3)) / 3;
-    osc.add(Reading('Stochastic (14,3)', 'K ${f1(k)} / D ${f1(dd)}', k < 20 ? 1 : k > 80 ? -1 : 0));
+    osc.add(Reading('Stochastic (14,3)', 'K ${f1(k)} / D ${f1(dd)}', k < 20 ? 1 : k > 80 ? -1 : 0, true));
   }
   if (n >= 20) {
     final tp = <double>[for (var i = 0; i < n; i++) (h[i] + l[i] + c[i]) / 3];
@@ -231,7 +272,7 @@ Analysis analyze(List<Candle> cs, int d) {
     }
     md /= 20;
     final cci = md == 0 ? 0.0 : (tp.last - sm) / (0.015 * md);
-    osc.add(Reading('CCI (20)', f1(cci), cci < -100 ? 1 : cci > 100 ? -1 : 0));
+    osc.add(Reading('CCI (20)', f1(cci), cci < -100 ? 1 : cci > 100 ? -1 : 0, true));
   }
   if (n >= 14) {
     var hh = -1e300, ll = 1e300;
@@ -240,7 +281,7 @@ Analysis analyze(List<Candle> cs, int d) {
       if (l[j] < ll) ll = l[j];
     }
     final wr = hh == ll ? -50.0 : -100 * (hh - last) / (hh - ll);
-    osc.add(Reading('Williams %R (14)', f1(wr), wr < -80 ? 1 : wr > -20 ? -1 : 0));
+    osc.add(Reading('Williams %R (14)', f1(wr), wr < -80 ? 1 : wr > -20 ? -1 : 0, true));
   }
   final e12 = emaSeries(c, 12), e26 = emaSeries(c, 26);
   final macdLine = <double>[for (var i = 0; i < n; i++) e12[i] - e26[i]];
@@ -258,6 +299,7 @@ Analysis analyze(List<Candle> cs, int d) {
   }
   if (n >= 30) {
     final ax = adxCalc(h, l, c, 14);
+    adxV = ax[0];
     osc.add(Reading('ADX (14)', '${f1(ax[0])}  +DI ${f1(ax[1])} / -DI ${f1(ax[2])}', ax[0] > 20 ? (ax[1] > ax[2] ? 1 : -1) : 0));
   }
   if (n >= 20) {
@@ -269,7 +311,7 @@ Analysis analyze(List<Candle> cs, int d) {
     final sd = math.sqrt(varc / 20);
     final up = mid + 2 * sd, lo = mid - 2 * sd;
     final pb = up == lo ? 0.5 : (last - lo) / (up - lo);
-    osc.add(Reading('Bollinger %B (20,2)', pb.toStringAsFixed(2), pb < 0.05 ? 1 : pb > 0.95 ? -1 : 0));
+    osc.add(Reading('Bollinger %B (20,2)', pb.toStringAsFixed(2), pb < 0.05 ? 1 : pb > 0.95 ? -1 : 0, true));
     info.add(Reading('Bollinger bands', '${f(up)} / ${f(mid)} / ${f(lo)}', 0));
   }
   if (n > 21) {
@@ -292,7 +334,7 @@ Analysis analyze(List<Candle> cs, int d) {
       }
     }
     final mfi = neg == 0 ? 100.0 : 100 - 100 / (1 + pos / neg);
-    osc.add(Reading('MFI (14)', f1(mfi), mfi < 20 ? 1 : mfi > 80 ? -1 : 0));
+    osc.add(Reading('MFI (14)', f1(mfi), mfi < 20 ? 1 : mfi > 80 ? -1 : 0, true));
     final obv = <double>[0];
     for (var i = 1; i < n; i++) {
       obv.add(obv[i - 1] + (c[i] > c[i - 1] ? v[i] : c[i] < c[i - 1] ? -v[i] : 0));
@@ -301,8 +343,171 @@ Analysis analyze(List<Candle> cs, int d) {
     osc.add(Reading('OBV vs EMA21', obv.last > oe ? 'Rising' : 'Falling', obv.last > oe ? 1 : -1));
   }
 
+  // ---- extra indicators
+  if (n >= 20) {
+    var upT = true, af = 0.02, ep = h[0], sar = l[0];
+    for (var i = 1; i < n; i++) {
+      sar = sar + af * (ep - sar);
+      if (upT) {
+        if (l[i] < sar) {
+          upT = false;
+          sar = ep;
+          ep = l[i];
+          af = 0.02;
+        } else if (h[i] > ep) {
+          ep = h[i];
+          af = math.min(af + 0.02, 0.2);
+        }
+      } else {
+        if (h[i] > sar) {
+          upT = true;
+          sar = ep;
+          ep = h[i];
+          af = 0.02;
+        } else if (l[i] < ep) {
+          ep = l[i];
+          af = math.min(af + 0.02, 0.2);
+        }
+      }
+    }
+    ma.add(Reading('Parabolic SAR', f(sar), upT ? 1 : -1));
+  }
+  if (n >= 80) {
+    double hhOf(int from, int to) {
+      var m = -1e300;
+      for (var j = from; j <= to; j++) {
+        if (h[j] > m) m = h[j];
+      }
+      return m;
+    }
+    double llOf(int from, int to) {
+      var m = 1e300;
+      for (var j = from; j <= to; j++) {
+        if (l[j] < m) m = l[j];
+      }
+      return m;
+    }
+    final tenkan = (hhOf(n - 9, n - 1) + llOf(n - 9, n - 1)) / 2;
+    final kijun = (hhOf(n - 26, n - 1) + llOf(n - 26, n - 1)) / 2;
+    final e = n - 27; // the cloud shown today was computed 26 bars ago
+    final sa = ((hhOf(e - 8, e) + llOf(e - 8, e)) / 2 + (hhOf(e - 25, e) + llOf(e - 25, e)) / 2) / 2;
+    final sb = (hhOf(e - 51, e) + llOf(e - 51, e)) / 2;
+    final cloudTop = math.max(sa, sb), cloudBot = math.min(sa, sb);
+    final sg = last > cloudTop && tenkan > kijun ? 1 : last < cloudBot && tenkan < kijun ? -1 : 0;
+    ma.add(Reading('Ichimoku', last > cloudTop ? 'Above cloud' : last < cloudBot ? 'Below cloud' : 'Inside cloud', sg));
+  }
+  if (n >= 20) {
+    final kMid = emaSeries(c, 20).last;
+    final a10 = wilder(trSeries(h, l, c), 10).last;
+    final kUp = kMid + 2 * a10, kLo = kMid - 2 * a10;
+    osc.add(Reading('Keltner channel (20,2)', last > kUp ? 'Above upper' : last < kLo ? 'Below lower' : 'Inside', last > kUp ? 1 : last < kLo ? -1 : 0));
+  }
+  if (n >= 40) {
+    final rs = rsiSeries(c, 14);
+    final raw = <double>[];
+    for (var i = 27; i < n; i++) {
+      var hh = -1e300, ll = 1e300;
+      for (var j = i - 13; j <= i; j++) {
+        if (rs[j] > hh) hh = rs[j];
+        if (rs[j] < ll) ll = rs[j];
+      }
+      raw.add(hh == ll ? 50.0 : 100 * (rs[i] - ll) / (hh - ll));
+    }
+    final k = (raw[raw.length - 1] + raw[raw.length - 2] + raw[raw.length - 3]) / 3;
+    osc.add(Reading('Stochastic RSI', f1(k), k < 20 ? 1 : k > 80 ? -1 : 0, true));
+  }
+  if (n >= 30) {
+    double avgU(int p) {
+      var bp = 0.0, tr = 0.0;
+      for (var i = n - p; i < n; i++) {
+        final lo = math.min(l[i], c[i - 1]), hi = math.max(h[i], c[i - 1]);
+        bp += c[i] - lo;
+        tr += hi - lo;
+      }
+      return tr == 0 ? 0.5 : bp / tr;
+    }
+    final uo = 100 * (4 * avgU(7) + 2 * avgU(14) + avgU(28)) / 7;
+    osc.add(Reading('Ultimate Oscillator', f1(uo), uo < 30 ? 1 : uo > 70 ? -1 : 0, true));
+  }
+  if (n > 26) {
+    var hi = n - 26, lo = n - 26;
+    for (var j = n - 26; j < n; j++) {
+      if (h[j] >= h[hi]) hi = j;
+      if (l[j] <= l[lo]) lo = j;
+    }
+    final aUp = 100 * (25 - (n - 1 - hi)) / 25, aDn = 100 * (25 - (n - 1 - lo)) / 25;
+    final ao = aUp - aDn;
+    osc.add(Reading('Aroon (25)', 'Up ${f1(aUp)} / Down ${f1(aDn)}', ao > 50 ? 1 : ao < -50 ? -1 : 0));
+  }
+  if (n > 14) {
+    final e13 = emaSeries(c, 13);
+    final bull = h[n - 1] - e13[n - 1], bear = l[n - 1] - e13[n - 1];
+    final pBull = h[n - 2] - e13[n - 2], pBear = l[n - 2] - e13[n - 2];
+    final rising = e13[n - 1] > e13[n - 2];
+    final sg = rising && bear < 0 && bear > pBear ? 1 : !rising && bull > 0 && bull < pBull ? -1 : 0;
+    osc.add(Reading('Elder Ray (13)', 'Bull ${f(bull)} / Bear ${f(bear)}', sg));
+  }
+  if (hasVol && n >= 20) {
+    var mfv = 0.0, vs = 0.0;
+    for (var i = n - 20; i < n; i++) {
+      final rg = h[i] - l[i];
+      final clv = rg == 0 ? 0.0 : ((c[i] - l[i]) - (h[i] - c[i])) / rg;
+      mfv += clv * v[i];
+      vs += v[i];
+    }
+    final cmf = vs == 0 ? 0.0 : mfv / vs;
+    osc.add(Reading('Chaikin Money Flow (20)', cmf.toStringAsFixed(2), cmf > 0.05 ? 1 : cmf < -0.05 ? -1 : 0));
+  }
+
   // ---- info
   final atr = wilder(trSeries(h, l, c), 14).last;
+
+  // ---- support / resistance read from the chart
+  var lvAll = srLevels(h, l, last, atr);
+  final strong = lvAll.where((x) => x[1] >= 2).toList();
+  if (strong.length >= 2) lvAll = strong;
+  final sups = <double>[for (final x in lvAll.reversed) if (x[0] < last) x[0]];
+  final ress = <double>[for (final x in lvAll) if (x[0] > last) x[0]];
+  if (atr > 0) {
+    final dS = sups.isEmpty ? 1e9 : (last - sups.first) / atr;
+    final dR = ress.isEmpty ? 1e9 : (ress.first - last) / atr;
+    final txt = '${sups.isEmpty ? 'S -' : 'S ${f(sups.first)} (${dS.toStringAsFixed(1)} ATR)'}  ${ress.isEmpty ? 'R -' : 'R ${f(ress.first)} (${dR.toStringAsFixed(1)} ATR)'}';
+    osc.add(Reading('Support / Resistance', txt, dS <= 0.6 ? 1 : dR <= 0.6 ? -1 : 0, true));
+  }
+  if (sups.isNotEmpty) info.add(Reading('Support levels', sups.take(3).map(f).join(' / '), 0));
+  if (ress.isNotEmpty) info.add(Reading('Resistance levels', ress.take(3).map(f).join(' / '), 0));
+
+  // ---- candlestick pattern on the latest candles
+  if (n >= 4) {
+    final i = n - 1;
+    final body = (c[i] - cs[i].open).abs(), rg = h[i] - l[i];
+    final upW = h[i] - math.max(c[i], cs[i].open), loW = math.min(c[i], cs[i].open) - l[i];
+    final pBody = (c[i - 1] - cs[i - 1].open).abs();
+    final bigPrev = (c[i - 2] - cs[i - 2].open).abs();
+    var name = 'None', sg = 0;
+    if (c[i - 2] < cs[i - 2].open && bigPrev > atr * 0.6 && pBody < bigPrev * 0.4 && c[i] > cs[i].open && c[i] > (c[i - 2] + cs[i - 2].open) / 2) {
+      name = 'Morning star';
+      sg = 1;
+    } else if (c[i - 2] > cs[i - 2].open && bigPrev > atr * 0.6 && pBody < bigPrev * 0.4 && c[i] < cs[i].open && c[i] < (c[i - 2] + cs[i - 2].open) / 2) {
+      name = 'Evening star';
+      sg = -1;
+    } else if (c[i - 1] < cs[i - 1].open && c[i] > cs[i].open && c[i] >= cs[i - 1].open && cs[i].open <= c[i - 1] && body > pBody) {
+      name = 'Bullish engulfing';
+      sg = 1;
+    } else if (c[i - 1] > cs[i - 1].open && c[i] < cs[i].open && c[i] <= cs[i - 1].open && cs[i].open >= c[i - 1] && body > pBody) {
+      name = 'Bearish engulfing';
+      sg = -1;
+    } else if (rg > 0 && body > 0 && loW > 2 * body && upW < 0.25 * rg) {
+      name = 'Hammer';
+      sg = 1;
+    } else if (rg > 0 && body > 0 && upW > 2 * body && loW < 0.25 * rg) {
+      name = 'Shooting star';
+      sg = -1;
+    } else if (rg > 0 && body < 0.1 * rg) {
+      name = 'Doji';
+    }
+    osc.add(Reading('Candle pattern', name, sg));
+  }
   info.add(Reading('ATR (14)', '${f(atr)}  (${(atr / last * 100).toStringAsFixed(2)}%)', 0));
   if (n > 2) {
     final p = (h[n - 2] + l[n - 2] + c[n - 2]) / 3;
@@ -319,7 +524,22 @@ Analysis analyze(List<Candle> cs, int d) {
       z++;
     }
   }
-  return Analysis(ma, osc, info, b, s, z, last, atr);
+  // regime-aware score: trust trend indicators in strong trends, oscillators in ranges
+  var wsum = 0.0, ssum = 0.0;
+  for (final r in [...ma, ...osc]) {
+    var w = 1.0;
+    if (!adxV.isNaN) {
+      if (adxV > 25) {
+        w = r.mr ? 0.5 : 1.5;
+      } else if (adxV < 20) {
+        w = r.mr ? 1.3 : 0.6;
+      }
+    }
+    wsum += w;
+    ssum += w * r.sig;
+  }
+  final score = wsum == 0 ? 0.0 : ssum / wsum;
+  return Analysis(ma, osc, info, b, s, z, last, atr, adxV, score, sups.take(3).toList(), ress.take(3).toList());
 }
 
 Future<List<Candle>> fetchCandles(String sym, String tf) async {
@@ -375,6 +595,192 @@ List<Candle> aggregateCandles(List<Candle> src, int hours) {
   return out;
 }
 
+
+// ---------- news, sentiment and web data ----------
+const newsFeeds = {
+  'CoinDesk': 'https://www.coindesk.com/arc/outboundfeeds/rss/',
+  'Cointelegraph': 'https://cointelegraph.com/rss',
+  'Decrypt': 'https://decrypt.co/feed',
+  'FXStreet': 'https://www.fxstreet.com/rss/news',
+  'ForexLive': 'https://www.forexlive.com/feed/news',
+  'CNBC': 'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664',
+  'BBC Business': 'https://feeds.bbci.co.uk/news/business/rss.xml',
+};
+const bullWords = ['surge', 'rally', 'soar', 'approve', 'inflow', 'adoption', 'rate cut', 'beats', 'record high', 'gains', 'bullish', 'jumps', 'rebound', 'recovers', 'upgrade', 'breakout', 'etf approval'];
+const bearWords = ['crash', 'plunge', 'hack', 'exploit', 'ban ', 'lawsuit', 'sues', 'rate hike', 'liquidat', 'fears', 'selloff', 'sell-off', 'bearish', 'slump', 'tumbles', 'warns', 'outflow', 'downgrade', 'sanction', 'default'];
+const macroWords = ['fed ', 'fomc', 'inflation', 'cpi', 'dollar', 'powell', 'yields', 'tariff'];
+const coinKeys = {
+  'BTC': ['bitcoin', 'btc'], 'ETH': ['ethereum', 'ether '], 'SOL': ['solana'], 'BNB': ['bnb', 'binance'], 'XRP': ['xrp', 'ripple'],
+  'DOGE': ['dogecoin', 'doge'], 'GOLD': ['gold'], 'SILVER': ['silver'], 'OIL': ['oil', 'crude', 'opec', 'brent'],
+  'EURUSD': ['euro ', 'ecb', 'eur/usd'], 'GBPUSD': ['sterling', 'boe', 'gbp', 'pound'], 'USDJPY': ['yen', 'boj', 'jpy'],
+  'AUDUSD': ['aussie', 'rba', 'aud '], 'USDCAD': ['loonie', 'boc', 'canadian dollar'],
+};
+const symCurrencies = {
+  'EURUSD': ['EUR', 'USD'], 'GBPUSD': ['GBP', 'USD'], 'USDJPY': ['USD', 'JPY'], 'AUDUSD': ['AUD', 'USD'], 'USDCAD': ['USD', 'CAD'],
+};
+
+List<String> keysFor(String sym) => coinKeys[sym] ?? [sym.length >= 4 ? sym.toLowerCase() : ' ${sym.toLowerCase()} '];
+
+class NewsItem {
+  final String title, source;
+  final DateTime? time;
+  final int score;
+  NewsItem(this.title, this.source, this.time, this.score);
+}
+
+class EconEvent {
+  final String title, country, forecast, previous;
+  final DateTime time;
+  EconEvent(this.title, this.country, this.time, this.forecast, this.previous);
+}
+
+int scoreTitle(String t) {
+  final x = ' ${t.toLowerCase()} ';
+  var sc = 0;
+  for (final w in bullWords) {
+    if (x.contains(w)) sc++;
+  }
+  for (final w in bearWords) {
+    if (x.contains(w)) sc--;
+  }
+  return sc;
+}
+
+String unescapeXml(String s) => s
+    .replaceAll('<![CDATA[', '')
+    .replaceAll(']]>', '')
+    .replaceAll('&amp;', '&')
+    .replaceAll('&#39;', "'")
+    .replaceAll('&#8217;', "'")
+    .replaceAll('&quot;', '"')
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .trim();
+
+DateTime? parseRfc822(String s) {
+  final m = RegExp(r'(\d{1,2}) (\w{3}) (\d{4}) (\d{2}):(\d{2})(?::(\d{2}))?').firstMatch(s);
+  if (m == null) return DateTime.tryParse(s);
+  const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  final mo = months.indexOf(m.group(2)!.toLowerCase()) + 1;
+  if (mo == 0) return null;
+  var t = DateTime.utc(int.parse(m.group(3)!), mo, int.parse(m.group(1)!), int.parse(m.group(4)!), int.parse(m.group(5)!), int.parse(m.group(6) ?? '0'));
+  final z = RegExp(r'([+-])(\d{2})(\d{2})\s*$').firstMatch(s.trim());
+  if (z != null) {
+    final off = Duration(hours: int.parse(z.group(2)!), minutes: int.parse(z.group(3)!));
+    t = z.group(1) == '+' ? t.subtract(off) : t.add(off);
+  }
+  return t;
+}
+
+List<NewsItem> parseRss(String body, String source) {
+  final out = <NewsItem>[];
+  for (final m in RegExp(r'<item[\s>](.*?)</item>', dotAll: true).allMatches(body)) {
+    final blk = m.group(1) ?? '';
+    final t = RegExp(r'<title[^>]*>(.*?)</title>', dotAll: true).firstMatch(blk)?.group(1);
+    if (t == null) continue;
+    final d = RegExp(r'<pubDate[^>]*>(.*?)</pubDate>', dotAll: true).firstMatch(blk)?.group(1);
+    final title = unescapeXml(t);
+    out.add(NewsItem(title, source, d == null ? null : parseRfc822(d.trim()), scoreTitle(title)));
+  }
+  return out;
+}
+
+Future<List<NewsItem>> fetchNews() async {
+  final res = await Future.wait(newsFeeds.entries.map<Future<List<NewsItem>>>((e) async {
+    try {
+      final r = await http.get(Uri.parse(e.value), headers: {'User-Agent': 'Mozilla/5.0'}).timeout(const Duration(seconds: 15));
+      if (r.statusCode != 200) return <NewsItem>[];
+      return parseRss(r.body, e.key).take(20).toList();
+    } catch (_) {
+      return <NewsItem>[];
+    }
+  }));
+  final all = [for (final l in res) ...l];
+  all.sort((a, b) => (b.time ?? DateTime(2000)).compareTo(a.time ?? DateTime(2000)));
+  return all.take(120).toList();
+}
+
+Future<Map<String, dynamic>?> fetchFng() async {
+  try {
+    final r = await http.get(Uri.parse('https://api.alternative.me/fng/?limit=2')).timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) return null;
+    final d = jsonDecode(r.body)['data'] as List;
+    return {'value': int.parse('${d[0]['value']}'), 'label': '${d[0]['value_classification']}', 'prev': d.length > 1 ? int.parse('${d[1]['value']}') : null};
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<List<EconEvent>> fetchEvents() async {
+  try {
+    final r = await http.get(Uri.parse('https://nfs.faireconomy.media/ff_calendar_thisweek.json'), headers: {'User-Agent': 'Mozilla/5.0'}).timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) return [];
+    final out = <EconEvent>[];
+    for (final e in jsonDecode(r.body) as List) {
+      if (e['impact'] != 'High') continue;
+      final t = DateTime.tryParse('${e['date']}');
+      if (t == null) continue;
+      out.add(EconEvent('${e['title']}', '${e['country']}', t.toLocal(), '${e['forecast'] ?? ''}', '${e['previous'] ?? ''}'));
+    }
+    out.sort((a, b) => a.time.compareTo(b.time));
+    return out;
+  } catch (_) {
+    return [];
+  }
+}
+
+// Binance futures positioning: funding rate (%), open interest (coins), long/short account ratio
+Future<Map<String, double>> fetchFutMeta(String coin) async {
+  final pair = futSymbols[coin] ?? '${coin}USDT';
+  final out = <String, double>{};
+  try {
+    final r = await http.get(Uri.https('fapi.binance.com', '/fapi/v1/premiumIndex', {'symbol': pair})).timeout(const Duration(seconds: 10));
+    if (r.statusCode == 200) out['funding'] = double.parse('${jsonDecode(r.body)['lastFundingRate']}') * 100;
+  } catch (_) {}
+  try {
+    final r = await http.get(Uri.https('fapi.binance.com', '/fapi/v1/openInterest', {'symbol': pair})).timeout(const Duration(seconds: 10));
+    if (r.statusCode == 200) out['oi'] = double.parse('${jsonDecode(r.body)['openInterest']}');
+  } catch (_) {}
+  try {
+    final r = await http.get(Uri.https('fapi.binance.com', '/futures/data/globalLongShortAccountRatio', {'symbol': pair, 'period': '1h', 'limit': '1'})).timeout(const Duration(seconds: 10));
+    if (r.statusCode == 200) {
+      final d = jsonDecode(r.body) as List;
+      if (d.isNotEmpty) out['ls'] = double.parse('${d[0]['longShortRatio']}');
+    }
+  } catch (_) {}
+  return out;
+}
+
+String compactNum(double v) => v >= 1e9 ? '${(v / 1e9).toStringAsFixed(2)}B' : v >= 1e6 ? '${(v / 1e6).toStringAsFixed(2)}M' : v >= 1e3 ? '${(v / 1e3).toStringAsFixed(1)}K' : v.toStringAsFixed(2);
+
+String hhmm(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+String untilText(DateTime t) {
+  final d = t.difference(DateTime.now());
+  final a = d.abs();
+  final txt = a.inDays >= 1 ? '${a.inDays}d ${a.inHours % 24}h' : a.inHours >= 1 ? '${a.inHours}h ${a.inMinutes % 60}m' : '${a.inMinutes}m';
+  return d.isNegative ? '$txt ago' : 'in $txt';
+}
+
+// Stop / target using chart support and resistance when they are close enough to be useful.
+List<double> tradePlan(Analysis a) {
+  final side = a.side;
+  var sl = a.last - side * 1.5 * a.atr;
+  final lvl = side == 1 ? (a.sup.isEmpty ? double.nan : a.sup.first - 0.2 * a.atr) : (a.res.isEmpty ? double.nan : a.res.first + 0.2 * a.atr);
+  if (!lvl.isNaN) {
+    final dist = (a.last - lvl).abs();
+    if (dist >= 0.8 * a.atr && dist <= 3 * a.atr) sl = lvl;
+  }
+  final risk = (a.last - sl).abs();
+  var tp = a.last + side * 2 * risk;
+  final tgt = side == 1 ? (a.res.isEmpty ? double.nan : a.res.first) : (a.sup.isEmpty ? double.nan : a.sup.first);
+  if (!tgt.isNaN) {
+    final dist = (tgt - a.last).abs();
+    if (dist >= 1.2 * risk && dist < 2 * risk) tp = tgt;
+  }
+  return [sl, tp, risk == 0 ? 0.0 : (tp - a.last).abs() / risk];
+}
+
 class SignalApp extends StatelessWidget {
   const SignalApp({super.key});
 
@@ -419,6 +825,16 @@ class _HomeState extends State<Home> {
   bool mtfBusy = false;
   Timer? mtfTimer;
   String tfFilter = 'All';
+  List<NewsItem> news = [];
+  List<EconEvent> events = [];
+  Map<String, dynamic>? fng;
+  bool newsBusy = false;
+  String? newsError;
+  DateTime? newsUpdated;
+  String newsFilter = 'All';
+  Map<String, double> futMeta = {};
+  String futMetaSym = '';
+  Timer? newsTimer;
   String? futuresError;
   List<ScanRow> scanRows = [];
   List<Map<String, dynamic>> movers = [];
@@ -438,6 +854,8 @@ class _HomeState extends State<Home> {
     loadMarket();
     marketTimer = Timer.periodic(const Duration(seconds: 1), (_) => loadMarket(silent: true));
     loadFutures();
+    loadNews();
+    newsTimer = Timer.periodic(const Duration(minutes: 5), (_) => loadNews());
     loadMtf();
     mtfTimer = Timer.periodic(const Duration(seconds: 30), (_) => loadMtf());
   }
@@ -448,6 +866,7 @@ class _HomeState extends State<Home> {
     marketTimer?.cancel();
     mtfTimer?.cancel();
     scanTimer?.cancel();
+    newsTimer?.cancel();
     super.dispose();
   }
 
@@ -602,6 +1021,55 @@ class _HomeState extends State<Home> {
     }
   }
 
+  Future<void> loadNews() async {
+    if (newsBusy) return;
+    newsBusy = true;
+    try {
+      final fn = fetchNews(), ff = fetchFng(), fe = fetchEvents();
+      news = await fn;
+      fng = await ff;
+      events = await fe;
+      newsError = news.isEmpty ? 'No headlines could be loaded. Check your internet connection.' : null;
+      newsUpdated = DateTime.now();
+    } catch (e) {
+      newsError = '$e';
+    } finally {
+      newsBusy = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  // headlines from the last 24h that mention the symbol (full weight) or macro themes (half weight)
+  int newsScore(String sym) {
+    final keys = keysFor(sym);
+    final cutoff = DateTime.now().subtract(const Duration(hours: 24));
+    var tot = 0.0;
+    for (final n in news) {
+      if (n.time != null && n.time!.isBefore(cutoff)) continue;
+      final t = ' ${n.title.toLowerCase()} ';
+      if (keys.any((k) => t.contains(k))) {
+        tot += n.score;
+      } else if (macroWords.any((k) => t.contains(k))) {
+        tot += 0.5 * n.score;
+      }
+    }
+    return tot.round();
+  }
+
+  bool newsMatches(NewsItem n, String sym) {
+    final t = ' ${n.title.toLowerCase()} ';
+    return keysFor(sym).any((k) => t.contains(k));
+  }
+
+  EconEvent? eventSoon(String sym) {
+    final cur = symCurrencies[sym] ?? ['USD'];
+    final now = DateTime.now();
+    for (final e in events) {
+      if (cur.contains(e.country) && e.time.difference(now).inMinutes.abs() <= 45) return e;
+    }
+    return null;
+  }
+
   Future<void> loadMtf() async {
     if (mtfBusy) return;
     mtfBusy = true;
@@ -617,6 +1085,16 @@ class _HomeState extends State<Home> {
       }));
       if (sym == marketSymbol) {
         mtf = {for (var i = 0; i < mtfList.length; i++) mtfList[i]: res[i]};
+        if (!yahooPairs.containsKey(sym)) {
+          final meta = await fetchFutMeta(sym);
+          if (sym == marketSymbol) {
+            futMeta = meta;
+            futMetaSym = sym;
+          }
+        } else {
+          futMeta = {};
+          futMetaSym = '';
+        }
       }
     } finally {
       mtfBusy = false;
@@ -648,6 +1126,7 @@ class _HomeState extends State<Home> {
   Widget marketTab() {
     final all = candles['$marketSymbol|$marketInterval'] ?? <Candle>[];
     final list = all.takeLast(60);
+    final an = all.length >= 35 ? analyze(all, decimalsFor(marketSymbol, all.last.close)) : null;
     final price = latestPrices[marketSymbol];
     final pkt = DateTime.now().toUtc().add(const Duration(hours: 5));
     String hm(int h, int m) => '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
@@ -674,12 +1153,12 @@ class _HomeState extends State<Home> {
         const SizedBox(height: 12),
         if (marketLoading) const LinearProgressIndicator(),
         if (marketError != null) Text(marketError!, style: const TextStyle(color: Colors.orange)),
-        if (list.length > 1) SizedBox(height: 260, child: CustomPaint(painter: CandlePainter(list, Theme.of(context).brightness==Brightness.dark), child: const SizedBox.expand())) else const SizedBox(height: 200, child: Center(child: Text('Waiting for candlestick data...'))),
+        if (list.length > 1) SizedBox(height: 260, child: CustomPaint(painter: CandlePainter(list, Theme.of(context).brightness==Brightness.dark, an?.sup ?? const <double>[], an?.res ?? const <double>[]), child: const SizedBox.expand())) else const SizedBox(height: 200, child: Center(child: Text('Waiting for candlestick data...'))),
         const Text('Candles show open, high, low and close. Free APIs may delay or limit data.', style: TextStyle(fontSize: 11)),
         const SizedBox(height: 14),
         Text('Technical indicators', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
-        if (all.length >= 35) _indicatorPanel(all) else const Text('More candles are needed to calculate indicators.'),
+        if (an != null) _indicatorPanel(an) else const Text('More candles are needed to calculate indicators.'),
       ]))),
       _mtfCard(),
       Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -723,15 +1202,118 @@ class _HomeState extends State<Home> {
     ]);
   }
 
-  Widget _indicatorPanel(List<Candle> all) {
-    final d = decimalsFor(marketSymbol, all.last.close);
-    final a = analyze(all, d);
+  Widget _finalCall(Analysis a) {
+    final d = decimalsFor(marketSymbol, a.last);
+    String f(double v) => v.toStringAsFixed(d);
+    final side = a.side;
+    final why = <String>[];
+    var pts = 0;
+    why.add(a.adx.isNaN
+        ? '• Trend strength unknown'
+        : a.adx > 25
+            ? '• Strong trend (ADX ${a.adx.toStringAsFixed(0)}): trend indicators count more'
+            : a.adx < 20
+                ? '• Ranging market (ADX ${a.adx.toStringAsFixed(0)}): oscillators count more'
+                : '• Moderate trend (ADX ${a.adx.toStringAsFixed(0)})');
+    final idx = mtfList.indexOf(marketInterval);
+    for (final tf in mtfList.skip(idx + 1).take(2)) {
+      final h = mtf[tf];
+      if (h == null) continue;
+      if (side != 0 && h.side == side) {
+        pts++;
+        why.add('✔ $tf agrees (${h.verdict})');
+      } else if (side != 0 && h.side == -side) {
+        pts--;
+        why.add('✖ $tf disagrees (${h.verdict})');
+      } else {
+        why.add('• $tf is ${h.verdict}');
+      }
+    }
+    if (side != 0 && a.atr > 0) {
+      final wall = side == 1 ? a.res : a.sup;
+      final floor = side == 1 ? a.sup : a.res;
+      if (wall.isNotEmpty && (wall.first - a.last).abs() / a.atr < 1.0) {
+        pts--;
+        why.add('✖ ${side == 1 ? 'Resistance' : 'Support'} ${f(wall.first)} is very close');
+      }
+      if (floor.isNotEmpty && (a.last - floor.first).abs() / a.atr < 0.8) {
+        pts++;
+        why.add('✔ Price is next to ${side == 1 ? 'support' : 'resistance'} ${f(floor.first)}');
+      }
+    }
+    if (news.isNotEmpty) {
+      final ns = newsScore(marketSymbol);
+      if (ns >= 2) {
+        if (side == 1) pts++;
+        if (side == -1) pts--;
+        why.add('${side == -1 ? '✖' : side == 1 ? '✔' : '•'} News is bullish (score $ns)');
+      } else if (ns <= -2) {
+        if (side == -1) pts++;
+        if (side == 1) pts--;
+        why.add('${side == 1 ? '✖' : side == -1 ? '✔' : '•'} News is bearish (score $ns)');
+      } else {
+        why.add('• News is mixed (score $ns)');
+      }
+    }
+    if (futMetaSym == marketSymbol && futMeta.isNotEmpty) {
+      final fr = futMeta['funding'];
+      if (fr != null) {
+        if (side == 1 && fr > 0.05) {
+          pts--;
+          why.add('✖ Funding ${fr.toStringAsFixed(3)}%: crowded longs');
+        } else if (side == -1 && fr < -0.05) {
+          pts--;
+          why.add('✖ Funding ${fr.toStringAsFixed(3)}%: crowded shorts');
+        } else {
+          why.add('• Funding ${fr.toStringAsFixed(3)}%');
+        }
+      }
+      if (futMeta['ls'] != null) why.add('• Long/short accounts ${futMeta['ls']!.toStringAsFixed(2)}');
+      if (futMeta['oi'] != null) why.add('• Open interest ${compactNum(futMeta['oi']!)} coins');
+    }
+    final fg = fng;
+    if (fg != null && !yahooPairs.containsKey(marketSymbol)) why.add('• Crypto Fear & Greed ${fg['value']} (${fg['label']})');
+    final ev = eventSoon(marketSymbol);
+    String call;
+    Color col;
+    if (ev != null) {
+      call = 'WAIT: ${ev.country} ${ev.title} ${untilText(ev.time)}';
+      col = Colors.orange;
+    } else if (side == 0) {
+      call = 'NEUTRAL: no clear edge';
+      col = Colors.grey;
+    } else {
+      final conf = (a.score.abs() >= .5 && pts >= 1) || pts >= 2 ? 'HIGH' : pts >= 0 ? 'MEDIUM' : 'LOW';
+      call = '${side == 1 ? 'BUY' : 'SELL'}: $conf confidence';
+      col = side == 1 ? Colors.green : Colors.red;
+    }
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(border: Border.all(color: col, width: 2), borderRadius: BorderRadius.circular(8)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Final call (indicators + timeframes + chart levels + news)', style: TextStyle(fontSize: 11)),
+        Text(call, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: col)),
+        const SizedBox(height: 4),
+        for (final w in why) Text(w, style: const TextStyle(fontSize: 12)),
+      ]),
+    );
+  }
+
+  Widget _indicatorPanel(Analysis a) {
+    final d = decimalsFor(marketSymbol, a.last);
     final col = a.side == 1 ? Colors.green : a.side == -1 ? Colors.red : Colors.grey;
     String f(double v) => v.isNaN || v.isInfinite ? 'N/A' : v.toStringAsFixed(d);
-    final plan = a.side == 0 || a.atr.isNaN
-        ? 'No clear trade: indicators are mixed'
-        : '${a.side == 1 ? 'BUY' : 'SELL'} ${f(a.last)} | SL ${f(a.last - a.side * 1.5 * a.atr)} | TP ${f(a.last + a.side * 3 * a.atr)}';
+    String plan;
+    if (a.side == 0 || a.atr.isNaN) {
+      plan = 'No clear trade: indicators are mixed';
+    } else {
+      final tp = tradePlan(a);
+      plan = '${a.side == 1 ? 'BUY' : 'SELL'} ${f(a.last)} | SL ${f(tp[0])} | TP ${f(tp[1])} | R:R 1:${tp[2].toStringAsFixed(1)}';
+    }
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _finalCall(a),
       Container(
         width: double.infinity,
         padding: const EdgeInsets.all(10),
@@ -746,7 +1328,7 @@ class _HomeState extends State<Home> {
       _section('Moving averages and trend', a.ma),
       _section('Oscillators and momentum', a.osc),
       _section('Levels', a.info),
-      const Padding(padding: EdgeInsets.only(top: 8), child: Text('Calculated from the last 300 candles. Not a guaranteed signal. Stop = 1.5x ATR, target = 3x ATR. Gold, forex and oil are closed on weekends. Forex has no real volume, so volume indicators (VWAP, MFI, OBV) only appear for crypto, gold and oil.', style: TextStyle(fontSize: 11))),
+      const Padding(padding: EdgeInsets.only(top: 8), child: Text('Calculated from the last 300 candles. Support and resistance are swing levels read from the chart (green and red dashed lines). Stop and target use those levels when they are close, otherwise 1.5x ATR and 2x risk. Not a guaranteed signal. Gold, forex and oil are closed on weekends. Forex has no real volume, so volume indicators (VWAP, MFI, OBV) only appear for crypto, gold and oil.', style: TextStyle(fontSize: 11))),
     ]);
   }
 
@@ -783,7 +1365,7 @@ class _HomeState extends State<Home> {
       );
 
   Widget scannerTab() {
-    final rows = scanRows.where((r) => scanFilter == 'All' || (scanFilter == 'BUY' && r.a.side == 1) || (scanFilter == 'SELL' && r.a.side == -1)).toList();
+    final rows = scanRows.where((r) => scanFilter == 'All' || (scanFilter == 'BUY' && r.a.side == 1) || (scanFilter == 'SELL' && r.a.side == -1) || (scanFilter == 'NEUTRAL' && r.a.side == 0) || r.a.verdict == scanFilter).toList();
     if (scanSort == 'Strength') {
       rows.sort((a, b) => b.a.score.abs().compareTo(a.a.score.abs()));
     } else if (scanSort == '24h %') {
@@ -805,7 +1387,7 @@ class _HomeState extends State<Home> {
           Wrap(spacing: 8, children: [
             for (final n in [20, 50, 100, 999]) ChoiceChip(label: Text(n == 999 ? 'All coins' : 'Top $n'), selected: scanN == n, onSelected: (_) => setState(() => scanN = n)),
           ]),
-          Wrap(spacing: 8, children: [for (final f in ['All', 'BUY', 'SELL']) ChoiceChip(label: Text(f), selected: scanFilter == f, onSelected: (_) => setState(() => scanFilter = f))]),
+          Wrap(spacing: 8, children: [for (final f in ['All', 'BUY', 'NEUTRAL', 'SELL', 'STRONG BUY', 'STRONG SELL']) ChoiceChip(label: Text(f), selected: scanFilter == f, onSelected: (_) => setState(() => scanFilter = f))]),
           Wrap(spacing: 8, children: [for (final f in ['Strength', '24h %', 'Volume']) ChoiceChip(label: Text('Sort: $f'), selected: scanSort == f, onSelected: (_) => setState(() => scanSort = f))]),
           Row(children: [
             ElevatedButton.icon(onPressed: scanning ? null : runScan, icon: const Icon(Icons.radar), label: Text(scanning ? 'Scanning...' : 'Scan now')),
@@ -847,6 +1429,58 @@ class _HomeState extends State<Home> {
         ]),
       );
     });
+  }
+
+  Widget newsTab() {
+    final shown = news.where((n) {
+      if (newsFilter == 'Bullish') return n.score > 0;
+      if (newsFilter == 'Bearish') return n.score < 0;
+      if (newsFilter.startsWith('Selected')) return newsMatches(n, marketSymbol);
+      return true;
+    }).take(60).toList();
+    final now = DateTime.now();
+    final upcoming = events.where((e) => e.time.isAfter(now.subtract(const Duration(hours: 2)))).take(10).toList();
+    final fg = fng;
+    Color fgColor(int v) => v < 25 ? Colors.red : v < 45 ? Colors.orange : v < 55 ? Colors.grey : v < 75 ? Colors.lightGreen : Colors.green;
+    return RefreshIndicator(
+      onRefresh: loadNews,
+      child: ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(12), children: [
+        Text('News and market data', style: Theme.of(context).textTheme.titleMedium),
+        Text(newsUpdated == null ? 'Loading...' : 'Updated ${ago(newsUpdated!.toIso8601String())}. Sources: CoinDesk, Cointelegraph, Decrypt, FXStreet, ForexLive, CNBC, BBC Business.', style: const TextStyle(fontSize: 12)),
+        if (fg != null)
+          Card(child: Padding(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Crypto Fear & Greed: ${fg['value']} (${fg['label']})', style: const TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            LinearProgressIndicator(value: (fg['value'] as int) / 100, color: fgColor(fg['value'] as int), minHeight: 8),
+            if (fg['prev'] != null) Text('Yesterday: ${fg['prev']}', style: const TextStyle(fontSize: 12)),
+          ]))),
+        Card(child: Padding(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('High-impact economic events', style: TextStyle(fontWeight: FontWeight.w700)),
+          if (upcoming.isEmpty) const Text('None found for this week (or the calendar could not load).', style: TextStyle(fontSize: 12)),
+          for (final e in upcoming)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text('${e.country} ${e.title}  |  ${hhmm(e.time)} (${untilText(e.time)})${e.forecast.isNotEmpty ? '  fc ${e.forecast}' : ''}${e.previous.isNotEmpty ? '  prev ${e.previous}' : ''}', style: const TextStyle(fontSize: 12)),
+            ),
+          const SizedBox(height: 4),
+          const Text('The Final call shows WAIT when an event for the pair is within 45 minutes.', style: TextStyle(fontSize: 11)),
+        ]))),
+        Wrap(spacing: 8, children: [
+          for (final f in ['All', 'Selected: $marketSymbol', 'Bullish', 'Bearish'])
+            ChoiceChip(label: Text(f), selected: newsFilter == f || (f.startsWith('Selected') && newsFilter.startsWith('Selected')), onSelected: (_) => setState(() => newsFilter = f)),
+        ]),
+        if (news.isEmpty) Padding(padding: const EdgeInsets.all(16), child: Text(newsError ?? 'Loading news...')),
+        for (final n in shown)
+          ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(n.score > 0 ? Icons.arrow_upward : n.score < 0 ? Icons.arrow_downward : Icons.remove, color: n.score > 0 ? Colors.green : n.score < 0 ? Colors.red : Colors.grey),
+            title: Text(n.title, maxLines: 3, overflow: TextOverflow.ellipsis),
+            subtitle: Text('${n.source}${n.time == null ? '' : '  |  ${ago(n.time!.toIso8601String())}'}'),
+          ),
+        const Padding(padding: EdgeInsets.only(top: 8), child: Text('Headline sentiment is a simple keyword count, so treat it as a hint, not a verdict.', style: TextStyle(fontSize: 11))),
+      ]),
+    );
   }
 
   Widget signalsTab() {
@@ -980,7 +1614,7 @@ class _HomeState extends State<Home> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 5,
+      length: 6,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Signal Bot'),
@@ -997,6 +1631,7 @@ class _HomeState extends State<Home> {
             Tab(text: 'Markets'),
             Tab(text: 'Scanner'),
             Tab(text: 'Signals'),
+            Tab(text: 'News'),
             Tab(text: 'Account'),
             Tab(text: 'Report'),
           ]),
@@ -1009,7 +1644,7 @@ class _HomeState extends State<Home> {
                 child: Text('Updated ${ago(data!['updated'])}', style: const TextStyle(fontSize: 12)),
               ),
             Expanded(
-              child: TabBarView(children: [marketTab(), scannerTab(), signalsTab(), accountTab(), reportTab()]),
+              child: TabBarView(children: [marketTab(), scannerTab(), signalsTab(), newsTab(), accountTab(), reportTab()]),
             ),
             const Padding(
               padding: EdgeInsets.all(6),
@@ -1032,7 +1667,8 @@ class Candle {
 class CandlePainter extends CustomPainter {
   final List<Candle> candles;
   final bool dark;
-  CandlePainter(this.candles, this.dark);
+  final List<double> sup, res;
+  CandlePainter(this.candles, this.dark, [this.sup = const [], this.res = const []]);
   @override
   void paint(Canvas canvas, Size size) {
     if (candles.isEmpty || size.width <= 0 || size.height <= 0) return;
@@ -1054,11 +1690,22 @@ class CandlePainter extends CustomPainter {
       canvas.drawRect(rect,Paint()..color=color);
     }
     final tp=TextPainter(textDirection: TextDirection.ltr);
+    void level(double v, Color col) {
+      if (v < minV || v > maxV) return;
+      final yy = y(v);
+      final p = Paint()..color = col.withOpacity(.75)..strokeWidth = 1;
+      for (double x = 0; x < size.width; x += 10) { canvas.drawLine(Offset(x, yy), Offset(math.min(x + 5, size.width), yy), p); }
+      tp.text = TextSpan(text: fmtPrice(v), style: TextStyle(fontSize: 10, color: col));
+      tp.layout();
+      tp.paint(canvas, Offset(size.width - tp.width - 2, yy - 12));
+    }
+    for (final v in sup) { level(v, Colors.green); }
+    for (final v in res) { level(v, Colors.red); }
     tp.text=TextSpan(text:fmtPrice(maxV),style:TextStyle(fontSize:10,color:dark?Colors.white70:Colors.black54)); tp.layout(); tp.paint(canvas,Offset(2,0));
     tp.text=TextSpan(text:fmtPrice(minV),style:TextStyle(fontSize:10,color:dark?Colors.white70:Colors.black54)); tp.layout(); tp.paint(canvas,Offset(2,size.height-14));
   }
   @override
-  bool shouldRepaint(covariant CandlePainter oldDelegate) => oldDelegate.candles != candles || oldDelegate.dark != dark;
+  bool shouldRepaint(covariant CandlePainter oldDelegate) => true;
 }
 
 extension TakeLastList<E> on List<E> {
