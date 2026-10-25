@@ -52,6 +52,12 @@ COPY_SOURCE_URL = os.getenv("COPY_SOURCE_URL", "")   # JSON list of trades from 
 STOCKS = ["AAPL", "MSFT", "GOOGL", "NVDA", "V", "KO", "JNJ", "PG", "XOM", "JPM", "PEP", "HD"]
 LONGTERM = ["BTC-USD", "ETH-USD", "GC=F", "SPY", "QQQ"]
 
+# extra crypto futures coins: top N USDT perpetuals by 24h volume, scanned with OKX data
+# (Binance blocks GitHub's US servers). 0 = off. These never get the "proven" label.
+FUTURES_TOP_N = 30
+FUTURES_TIMEFRAMES = ("15m", "30m", "1h", "4h", "1d")     # no 5m scalping on the extra coins
+FUTURES_EXCLUDE = {"BTC", "ETH", "SOL", "USDC", "FDUSD", "TUSD", "USDT", "DAI", "USDE"}
+
 # paper trading
 PAPER_START = 10000
 PAPER_RISK = 0.01

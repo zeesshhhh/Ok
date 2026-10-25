@@ -1,7 +1,7 @@
 import html, json, re, sys
 import pandas as pd
 from config import *
-from data import get_ohlc, resample
+from data import get_ohlc, resample, okx_ohlc, okx_top_swaps
 from signals import build
 from indicators import add_indicators
 from strategies import REGISTRY
@@ -17,12 +17,28 @@ def load_sent():
         return set()
 
 def fmt(p):
-    return f"{p:,.2f}" if p > 50 else f"{p:.5f}"
+    if p > 50:
+        return f"{p:,.2f}"
+    return f"{p:.5f}" if p >= 0.1 else f"{p:.8f}"
+
+def full_watchlist():
+    """Core watchlist plus the top crypto futures coins (OKX perpetuals)."""
+    w = dict(WATCHLIST)
+    if FUTURES_TOP_N:
+        try:
+            for s in okx_top_swaps(FUTURES_TOP_N, FUTURES_EXCLUDE):
+                w[s] = "crypto"
+        except Exception as e:
+            print("futures list error", e)
+    return w
 
 def load_rows(sym, tf, period):
-    df = get_ohlc(sym, INTERVAL[tf], period)
-    if tf == "4h" and len(df):
-        df = resample(df, "4h")
+    if sym.endswith("-USDT"):                          # OKX futures coin: native bars, 4h included
+        df = okx_ohlc(sym, tf)
+    else:
+        df = get_ohlc(sym, INTERVAL[tf], period)
+        if tf == "4h" and len(df):
+            df = resample(df, "4h")
     if len(df) < (210 if tf == "1d" else 250):
         return None
     return list((build(df) if tf == "1h" else add_indicators(df)).itertuples())
@@ -58,6 +74,7 @@ def scan():
     events, items = news.calendar(), news.headlines()
     now = pd.Timestamp.now(tz="UTC")
     rows, found, mood = {}, {}, {}
+    watch = full_watchlist()
 
     def add(sym, name, tf, R, s, max_age, hold, style, extra=""):
         if not s:
@@ -76,11 +93,11 @@ def scan():
             return
         found.setdefault(sym, []).append({**s, "strategy": name, "tf": tf, "entry": live, "key": key,
                                           "hold_h": hold, "style": style,
-                                          "grade": "proven" if name in PROVEN else "experimental"})
+                                          "grade": "proven" if name in PROVEN and sym in WATCHLIST else "experimental"})
 
-    for sym, asset in WATCHLIST.items():
+    for sym, asset in watch.items():
         rows[sym] = {}
-        for tf in INTERVAL:
+        for tf in (INTERVAL if sym in WATCHLIST else FUTURES_TIMEFRAMES):
             try:
                 R = load_rows(sym, tf, LIVE_PERIOD[tf])
                 R and rows[sym].__setitem__(tf, R)
@@ -106,7 +123,7 @@ def scan():
         except Exception as e:
             print(sym, "news/event error", e)
 
-    daily = {s: r["1d"] for s, r in rows.items() if "1d" in r}
+    daily = {s: r["1d"] for s, r in rows.items() if "1d" in r and s in WATCHLIST}
     wk = now.isocalendar()
     for sym, s, r in special.momentum_rank(daily):
         key = f"Momentum|{sym}|{wk.year}-{wk.week}|{s['side']}"
@@ -116,7 +133,7 @@ def scan():
 
     paper.update(ps, {s: r.get("15m") for s, r in rows.items()})
     for sym, sigs in found.items():
-        asset = WATCHLIST[sym]
+        asset = watch[sym]
         ev = news.near_high_impact(sym, events, NEWS_BLACKOUT_MIN)
         sc, top = mood[sym]
         keep = []
@@ -160,7 +177,7 @@ def scan():
         except Exception as e:
             print("pairs error", e)
 
-    for sym, asset in WATCHLIST.items():
+    for sym, asset in watch.items():
         a = special.arbitrage(sym) if asset == "crypto" else None
         key = a and f"Arb|{sym}|{a['buy']}|{a['sell']}|{now:%Y%m%d%H}"
         if a and a["hit"] and key not in sent:
@@ -195,7 +212,7 @@ def scan():
             pass
     soon and telegram.send("⚠️ <b>High-impact news within 1 hour</b>\n" + "\n".join(soon) + "\nSignals on affected pairs are paused around the release.")
 
-    json.dump({"sent": sorted(sent)[-600:]}, open(STATE, "w"))
+    json.dump({"sent": sorted(sent)[-3000:]}, open(STATE, "w"))
     paper.save(ps)
     fd["paper"] = paper.summary(ps)
     feed.save(fd)

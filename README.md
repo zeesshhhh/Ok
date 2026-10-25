@@ -39,6 +39,9 @@
 | Value / Growth / Dividend investing | Weekly fundamental screens on STOCKS | fundamentals.py |
 | Long-term / buy and hold | 200DMA, 12-month return, drawdown, DCA guidance, benchmark in backtest | fundamentals.py, backtest.py |
 
+## Crypto futures coins
+`FUTURES_TOP_N` in config.py (default 30) adds the top USDT perpetual coins by 24h volume, scanned with OKX data on 15m, 30m, 1H, 4H and 1D. They run every strategy but are always tagged experimental. Set it to 0 to switch off. Binance coins outside the top N are available in the app's Scanner tab only.
+
 ## Honest limits
 - True HFT needs colocated servers and microsecond latency. GitHub Actions cannot do it. The bot only reads order-book imbalance at scan time.
 - Arbitrage and copy trading are alerts. Fees, withdrawal time and USD-vs-USDT premiums often erase small spreads.
