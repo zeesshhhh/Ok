@@ -10,6 +10,17 @@ void main() => runApp(const SignalApp());
 
 double num0(dynamic v) => (v as num?)?.toDouble() ?? 0;
 
+const cryptoPairs = {'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'SOL': 'SOLUSDT'};
+const yahooPairs = {
+  'GOLD': 'GC=F', 'SILVER': 'XAGUSD=X', 'EURUSD': 'EURUSD=X', 'GBPUSD': 'GBPUSD=X',
+  'USDJPY': 'USDJPY=X', 'AUDUSD': 'AUDUSD=X', 'USDCAD': 'USDCAD=X', 'OIL': 'CL=F',
+};
+const yahooInterval = {'1m': '1m', '5m': '5m', '15m': '15m', '1h': '60m'};
+const yahooRange = {'1m': '1d', '5m': '5d', '15m': '5d', '1h': '1mo'};
+
+const fxPairs = {'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD'};
+int decimals(String sym) => sym == 'USDJPY' ? 3 : fxPairs.contains(sym) ? 5 : sym == 'SILVER' ? 3 : 2;
+
 String fmt(dynamic v) {
   final x = num0(v);
   return x > 50 ? x.toStringAsFixed(2) : x.toStringAsFixed(5);
@@ -70,9 +81,9 @@ class _HomeState extends State<Home> {
   void initState() {
     super.initState();
     load();
-    timer = Timer.periodic(const Duration(minutes: 1), (_) => load());
+    timer = Timer.periodic(const Duration(seconds: 30), (_) => load(silent: true));
     loadMarket();
-    marketTimer = Timer.periodic(const Duration(minutes: 1), (_) => loadMarket());
+    marketTimer = Timer.periodic(const Duration(seconds: 1), (_) => loadMarket(silent: true));
   }
 
   @override
@@ -82,30 +93,39 @@ class _HomeState extends State<Home> {
     super.dispose();
   }
 
-  Future<void> loadMarket() async {
-    if (marketLoading) return;
-    if (mounted) setState(() { marketLoading = true; marketError = null; });
+  bool marketBusy = false;
+
+  Future<void> loadMarket({bool silent = false}) async {
+    if (marketBusy) return;                       // never overlap requests
+    if (silent && yahooPairs.containsKey(marketSymbol) && marketUpdated != null &&
+        DateTime.now().difference(marketUpdated!).inSeconds < 15) {
+      return;                                     // Yahoo rate-limits: forex, gold and oil refresh every 15s
+    }
+    marketBusy = true;
+    if (!silent && mounted) setState(() { marketLoading = true; marketError = null; });
     try {
-      final symbols = marketSymbol == 'SILVER'
-          ? <String, String>{'SILVER': 'XAGUSD=X'}
-          : <String, String>{'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'SOL': 'SOLUSDT'};
-      if (marketSymbol == 'SILVER') {
-        final uri = Uri.parse('https://query1.finance.yahoo.com/v8/finance/chart/XAGUSD%3DX?range=1d&interval=1m');
+      final ySym = yahooPairs[marketSymbol];
+      if (ySym != null) {
+        final uri = Uri.https('query1.finance.yahoo.com', '/v8/finance/chart/$ySym',
+            {'range': yahooRange[marketInterval] ?? '1d', 'interval': yahooInterval[marketInterval] ?? '1m'});
         final response = await http.get(uri, headers: {'User-Agent': 'Mozilla/5.0'}).timeout(const Duration(seconds: 15));
-        if (response.statusCode != 200) throw 'Silver data unavailable (HTTP ${response.statusCode}). Free source may be rate-limited.';
-        final root = jsonDecode(response.body)['chart']['result'][0];
+        if (response.statusCode != 200) throw '$marketSymbol data unavailable (HTTP ${response.statusCode}). Free source may be rate-limited or the market is closed.';
+        final result = (jsonDecode(response.body)['chart']['result'] as List?) ?? [];
+        if (result.isEmpty) throw '$marketSymbol has no data right now (market may be closed).';
+        final root = result[0];
         final times = (root['timestamp'] as List?) ?? [];
         final q = root['indicators']['quote'][0];
         final os = q['open'] as List? ?? [], hs = q['high'] as List? ?? [], ls = q['low'] as List? ?? [], cs = q['close'] as List? ?? [];
         final list = <Candle>[];
-        for (var i=0; i<times.length; i++) {
-          if ([os[i],hs[i],ls[i],cs[i]].any((v) => v == null)) continue;
-          list.add(Candle(DateTime.fromMillisecondsSinceEpoch((times[i] as num).toInt()*1000), (os[i] as num).toDouble(), (hs[i] as num).toDouble(), (ls[i] as num).toDouble(), (cs[i] as num).toDouble()));
+        for (var i = 0; i < times.length; i++) {
+          if ([os[i], hs[i], ls[i], cs[i]].any((v) => v == null)) continue;
+          list.add(Candle(DateTime.fromMillisecondsSinceEpoch((times[i] as num).toInt() * 1000), (os[i] as num).toDouble(), (hs[i] as num).toDouble(), (ls[i] as num).toDouble(), (cs[i] as num).toDouble()));
         }
-        candles['SILVER'] = list.takeLast(60).toList();
-        if (list.isNotEmpty) latestPrices['SILVER'] = list.last.close;
+        candles[marketSymbol] = list.takeLast(60).toList();
+        final live = (root['meta']['regularMarketPrice'] as num?)?.toDouble();
+        if (list.isNotEmpty) latestPrices[marketSymbol] = live ?? list.last.close;
       } else {
-        final symbol = symbols[marketSymbol] ?? 'BTCUSDT';
+        final symbol = cryptoPairs[marketSymbol] ?? 'BTCUSDT';
         final uri = Uri.https('api.binance.com', '/api/v3/klines', {'symbol': symbol, 'interval': marketInterval, 'limit': '60'});
         final response = await http.get(uri).timeout(const Duration(seconds: 15));
         if (response.statusCode != 200) throw 'Market data unavailable (HTTP ${response.statusCode}).';
@@ -115,19 +135,21 @@ class _HomeState extends State<Home> {
         if (list.isNotEmpty) latestPrices[marketSymbol] = list.last.close;
       }
       marketUpdated = DateTime.now();
+      marketError = null;
     } catch (e) {
       marketError = '$e';
     } finally {
-      if (mounted) setState(() => marketLoading = false);
+      marketBusy = false;
+      if (mounted) setState(() => marketLoading = false);   // also repaints the chart and price each second
     }
   }
 
-  Future<void> load() async {
+  Future<void> load({bool silent = false}) async {
     if (feedUrl.isEmpty) {
       setState(() => error = 'FEED_URL was not set when the app was built.');
       return;
     }
-    setState(() => loading = true);
+    if (!silent) setState(() => loading = true);
     try {
       final r = await http
           .get(Uri.parse('$feedUrl?t=${DateTime.now().millisecondsSinceEpoch}'))
@@ -157,13 +179,13 @@ class _HomeState extends State<Home> {
     final nowMin = pkt.hour*60 + pkt.minute;
     bool isOpen(Map<String,dynamic> x) { final a=x['start'] as int, b=x['end'] as int; return a < b ? nowMin >= a && nowMin < b : nowMin >= a || nowMin < b; }
     return RefreshIndicator(onRefresh: loadMarket, child: ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(12), children: [
-      Wrap(spacing: 8, children: [for (final a in ['BTC','ETH','SOL','SILVER']) ChoiceChip(label: Text(a), selected: marketSymbol==a, onSelected: (_) { setState(() => marketSymbol=a); loadMarket(); })]),
+      Wrap(spacing: 8, children: [for (final a in ['BTC','ETH','SOL','GOLD','SILVER','EURUSD','GBPUSD','USDJPY','AUDUSD','USDCAD','OIL']) ChoiceChip(label: Text(a), selected: marketSymbol==a, onSelected: (_) { setState(() => marketSymbol=a); loadMarket(); })]),
       const SizedBox(height: 10),
-      Wrap(spacing: 8, children: [for (final tf in ['1m','5m','15m','1h']) if (marketSymbol!='SILVER') ChoiceChip(label: Text(tf), selected: marketInterval==tf, onSelected: (_) { setState(() => marketInterval=tf); loadMarket(); })]),
+      Wrap(spacing: 8, children: [for (final tf in ['1m','5m','15m','1h']) ChoiceChip(label: Text(tf), selected: marketInterval==tf, onSelected: (_) { setState(() => marketInterval=tf); loadMarket(); })]),
       const SizedBox(height: 10),
       Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(marketSymbol, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        Text(price == null ? 'Price unavailable' : '\$${price.toStringAsFixed(marketSymbol=='SILVER'?3:2)}', style: const TextStyle(fontSize: 27, fontWeight: FontWeight.w700)),
+        Text(price == null ? 'Price unavailable' : '${fxPairs.contains(marketSymbol) ? '' : '\$'}${price.toStringAsFixed(decimals(marketSymbol))}', style: const TextStyle(fontSize: 27, fontWeight: FontWeight.w700)),
         Text('Free public data • Last update: ${marketUpdated == null ? 'not yet' : ago(marketUpdated!.toIso8601String())}'),
         const SizedBox(height: 12),
         if (marketLoading) const LinearProgressIndicator(),
@@ -225,17 +247,38 @@ class _HomeState extends State<Home> {
     final mean = stdSlice.reduce((a, b) => a + b) / stdSlice.length;
     final variance = stdSlice.map((v) => math.pow(v - mean, 2).toDouble()).reduce((a, b) => a + b) / stdSlice.length;
     final deviation = math.sqrt(variance);
-    String val(double v) => v.isNaN || v.isInfinite ? 'N/A' : v.toStringAsFixed(marketSymbol == 'SILVER' ? 3 : 2);
+    String val(double v) => v.isNaN || v.isInfinite ? 'N/A' : v.toStringAsFixed(decimals(marketSymbol));
     String rsiText = rsi.isNaN ? 'N/A' : '${rsi.toStringAsFixed(1)} • ${rsi >= 70 ? 'Overbought' : rsi <= 30 ? 'Oversold' : 'Neutral'}';
     final trend = last > ema20 ? 'Above EMA20 (bullish bias)' : 'Below EMA20 (bearish bias)';
+    // ATR(14) from the loaded candles for stop / target distance
+    double atr = double.nan;
+    if (list.length > 15) {
+      final trs = <double>[];
+      for (var i = list.length - 14; i < list.length; i++) {
+        final c = list[i], p = list[i - 1];
+        trs.add(math.max(c.high - c.low, math.max((c.high - p.close).abs(), (c.low - p.close).abs())));
+      }
+      atr = trs.reduce((a, b) => a + b) / trs.length;
+    }
+    final bull = (last > ema20 ? 1 : 0) + (macd > 0 ? 1 : 0) + (!rsi.isNaN && rsi > 45 && rsi < 70 ? 1 : 0) + (!sma50.isNaN && last > sma50 ? 1 : 0);
+    final bear = (last < ema20 ? 1 : 0) + (macd < 0 ? 1 : 0) + (!rsi.isNaN && rsi < 55 && rsi > 30 ? 1 : 0) + (!sma50.isNaN && last < sma50 ? 1 : 0);
+    final side = bull >= 4 ? 1 : bear >= 4 ? -1 : 0;
+    final sigText = side == 0 || atr.isNaN
+        ? 'WAIT: indicators do not agree'
+        : '${side == 1 ? 'BUY' : 'SELL'} ${val(last)} | SL ${val(last - side * 1.5 * atr)} | TP ${val(last + side * 3 * atr)}';
     return Column(children: [
+      Container(
+        margin: const EdgeInsets.only(bottom: 8), padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(border: Border.all(color: side == 1 ? Colors.green : side == -1 ? Colors.red : Colors.grey), borderRadius: BorderRadius.circular(8)),
+        child: Text(sigText, style: TextStyle(fontWeight: FontWeight.bold, color: side == 1 ? Colors.green : side == -1 ? Colors.red : null)),
+      ),
       _indicatorRow('RSI (14)', rsiText, rsi >= 70 ? Colors.orange : rsi <= 30 ? Colors.lightBlue : null),
       _indicatorRow('EMA (20)', val(ema20), last >= ema20 ? Colors.green : Colors.red),
       _indicatorRow('SMA (20)', val(sma20), null),
       _indicatorRow('SMA (50)', val(sma50), null),
       _indicatorRow('MACD (12,26)', val(macd), macd >= 0 ? Colors.green : Colors.red),
       _indicatorRow('Bollinger Bands (20,2)', '${val(mean + 2 * deviation)} / ${val(mean)} / ${val(mean - 2 * deviation)}', null),
-      Padding(padding: const EdgeInsets.only(top: 6), child: Text('Quick trend: $trend. Indicators are calculated from the candles currently loaded and are not guaranteed trading signals.', style: const TextStyle(fontSize: 11))),
+      Padding(padding: const EdgeInsets.only(top: 6), child: Text('Quick trend: $trend. Indicators are calculated from the candles currently loaded and are not guaranteed trading signals. Gold, forex and oil are closed on weekends.', style: const TextStyle(fontSize: 11))),
     ]);
   }
 
