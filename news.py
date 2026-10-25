@@ -4,7 +4,9 @@ import requests
 from config import NEWS_KEYWORDS, MACRO_WORDS, CURRENCIES
 
 FEEDS = ["https://www.coindesk.com/arc/outboundfeeds/rss/", "https://cointelegraph.com/rss",
-         "https://www.fxstreet.com/rss/news", "https://www.forexlive.com/feed/news"]
+         "https://www.fxstreet.com/rss/news", "https://www.forexlive.com/feed/news", "https://decrypt.co/feed",
+         "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
+         "https://feeds.bbci.co.uk/news/business/rss.xml"]
 CALENDAR = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 BULL = ["surge", "rally", "soar", "approve", "inflow", "adoption", "rate cut", "beats", "record high", "gains", "bullish", "jumps"]
 BEAR = ["crash", "plunge", "hack", "ban", "lawsuit", "sues", "rate hike", "liquidat", "fears", "selloff", "bearish", "slump", "drops"]
@@ -64,3 +66,11 @@ def today_events(events):
         except Exception:
             pass
     return out
+
+def fear_greed():
+    """Crypto Fear & Greed index: (value, label) or None."""
+    try:
+        d = requests.get("https://api.alternative.me/fng/?limit=1", timeout=10).json()["data"][0]
+        return int(d["value"]), d["value_classification"]
+    except Exception:
+        return None

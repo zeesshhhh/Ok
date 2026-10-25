@@ -49,7 +49,18 @@ def card(s):
     return (f"<b>{html.escape(s['strategy'])}</b> {side} ({s['tf']}, {s['style']}){tag}\n"
             f"  {fmt(s['entry'])} | SL {fmt(s['sl'])} | TP {fmt(s['tp'])}\n  {html.escape(s['why'])}")
 
-def message(sym, sigs, sentiment, top, fnotes, micro):
+def htf_trend(R4):
+    """+1 / -1 when the 4h trend is clear, else 0."""
+    if not R4 or len(R4) < 3:
+        return 0
+    r = R4[-2]
+    if r.ema50 > r.ema200 and r.close > r.ema50:
+        return 1
+    if r.ema50 < r.ema200 and r.close < r.ema50:
+        return -1
+    return 0
+
+def message(sym, sigs, sentiment, top, fnotes, micro, extra=""):
     buys, sells = [s for s in sigs if s["side"] == 1], [s for s in sigs if s["side"] == -1]
     lead, side = (buys, "BUY") if len(buys) >= len(sells) else (sells, "SELL")
     other = sells if side == "BUY" else buys
@@ -62,6 +73,8 @@ def message(sym, sigs, sentiment, top, fnotes, micro):
     out.append(f"\nNews mood: {mood}" + (f"\n📰 {html.escape(top)}" if top else ""))
     if fnotes:
         out += ["\n📈 <b>Order flow</b>"] + ["• " + x for x in fnotes]
+    if extra:
+        out.append(extra)
     if micro:
         out.append(f"Order book: depth imbalance {micro['imbalance']:+.2f}, spread {micro['spread_bps']:.1f} bps")
     if n >= 3:
@@ -75,6 +88,7 @@ def scan():
     now = pd.Timestamp.now(tz="UTC")
     rows, found, mood = {}, {}, {}
     watch = full_watchlist()
+    fg = news.fear_greed()
 
     def add(sym, name, tf, R, s, max_age, hold, style, extra=""):
         if not s:
@@ -145,6 +159,10 @@ def scan():
                 continue
             if NEWS_FILTER and s["strategy"] != "News" and ((s["side"] == 1 and sc <= -2) or (s["side"] == -1 and sc >= 2)):
                 continue
+            if HTF_FILTER and s["tf"] in ("5m", "15m", "30m", "1h") and not s["strategy"].startswith(HTF_EXEMPT):
+                t4 = htf_trend(rows[sym].get("4h"))
+                if t4 and t4 != s["side"]:
+                    continue                           # fighting the 4h trend
             keep.append(s)
         flow_notes, f = {}, (flow_live.live_flow(sym) if asset == "crypto" else None)
         if f:
@@ -158,7 +176,8 @@ def scan():
         if nb == ns:                                    # equal BUY and SELL (or none): no edge, stay out
             continue
         fnotes = flow_notes.get(1 if nb > ns else -1, [])
-        telegram.send(message(sym, keep, sc, top, fnotes, special.order_book(sym) if asset == "crypto" else None))
+        extra = f"Fear & Greed: {fg[0]} ({fg[1]})" if fg and asset == "crypto" else ""
+        telegram.send(message(sym, keep, sc, top, fnotes, special.order_book(sym) if asset == "crypto" else None, extra))
         feed.add(fd, sym, keep)
         for s in keep:
             paper.open_pos(ps, sym, s)

@@ -62,6 +62,11 @@ FUTURES_EXCLUDE = {"BTC", "ETH", "SOL", "USDC", "FDUSD", "TUSD", "USDT", "DAI", 
 PAPER_START = 10000
 PAPER_RISK = 0.01
 
+# Higher-timeframe filter: a 5m/15m/30m/1h trend signal must not fight the 4h trend (EMA50 vs EMA200 and price vs EMA50).
+# Counter-trend strategies (Reversal, Mean reversion, Range, Price action) are exempt.
+HTF_FILTER = True
+HTF_EXEMPT = ("Reversal", "Mean reversion", "Range", "Price action", "Event-driven", "News")
+
 MAX_SIGNAL_AGE_H = 3
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
