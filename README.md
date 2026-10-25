@@ -54,5 +54,14 @@ The bot publishes `docs/feed.json` after each run. The app reads it, so the repo
 1. Run the Signal bot workflow once so `docs/feed.json` exists.
 2. Actions > Build APK > Run workflow (about 10 minutes).
 3. Open the repo's Releases page on your phone, download `signal-bot.apk`, and allow "install unknown apps" when asked.
-4. The app has three tabs: Signals (filter Buy/Sell), Account (paper trading by strategy), Report. Pull down to refresh.
+4. Tabs: Markets, Scanner, Signals, News, Alerts, Account (the bot's paper trades), Paper (the app's own paper trades), Report. Pull down to refresh.
+
+### In-app auto paper trading (Paper tab)
+- Switch on Auto paper trading. Every Scanner run (auto-scan is turned on for you) opens virtual trades from coins whose verdict meets your minimum strength, using the same stop and target as the Markets trade plan.
+- Rules: 1.2+ reward to risk, one open trade per coin, none during a high-impact news window, cooldown after a close. 1% risk per trade, 0.05R fees, same-candle stop and target counts as a loss.
+- Markets tab has a Paper trade this button for a manual entry.
+- Stops, targets and timeouts are checked every 60 seconds while the app is open. On reopening, the app replays candles since entry, so hits made while it was closed are still recorded.
+- Accuracy: win rate, average R, profit factor, hit target vs stop vs timeout, breakdown by timeframe, direction, signal strength and coin, plus a short list of the best and worst groups.
+- Download logs: in-app CSV, bot CSV, or both at once (share sheet, or copy to clipboard). Column names match, so the two can be compared. Send the files to tune the bot.
+- Trades live on the phone only. Clearing app data or Reset deletes them, so download first.
 Telegram stays your push-notification channel. The app is for viewing.
