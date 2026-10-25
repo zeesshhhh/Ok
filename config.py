@@ -3,17 +3,20 @@ import os
 WATCHLIST = {
     "BTC-USD": "crypto", "ETH-USD": "crypto", "SOL-USD": "crypto",
     "EURUSD=X": "forex", "GBPUSD=X": "forex", "USDJPY=X": "forex",
+    "AUDUSD=X": "forex", "USDCAD=X": "forex", "USDCHF=X": "forex",
     "GC=F": "futures", "SI=F": "futures", "ES=F": "futures", "NQ=F": "futures", "CL=F": "futures",
 }
 CURRENCIES = {
     "BTC-USD": ["USD"], "ETH-USD": ["USD"], "SOL-USD": ["USD"],
     "EURUSD=X": ["EUR", "USD"], "GBPUSD=X": ["GBP", "USD"], "USDJPY=X": ["JPY", "USD"],
+    "AUDUSD=X": ["AUD", "USD"], "USDCAD=X": ["USD", "CAD"], "USDCHF=X": ["USD", "CHF"],
     "GC=F": ["USD"], "SI=F": ["USD"], "ES=F": ["USD"], "NQ=F": ["USD"], "CL=F": ["USD"],
 }
 NEWS_KEYWORDS = {
     "BTC-USD": ["bitcoin", "btc"], "ETH-USD": ["ethereum", "ether", "eth "], "SOL-USD": ["solana"],
     "EURUSD=X": ["euro", "ecb", "eur/usd"], "GBPUSD=X": ["pound", "sterling", "boe", "gbp"],
-    "USDJPY=X": ["yen", "boj", "jpy"], "GC=F": ["gold"], "SI=F": ["silver"],
+    "USDJPY=X": ["yen", "boj", "jpy"],
+    "AUDUSD=X": ["aussie", "rba", "aud"], "USDCAD=X": ["loonie", "boc", "cad", "canadian dollar"], "USDCHF=X": ["franc", "snb", "chf"], "GC=F": ["gold"], "SI=F": ["silver"],
     "ES=F": ["s&p", "wall street", "stocks"], "NQ=F": ["nasdaq", "tech stocks"], "CL=F": ["oil", "crude", "opec"],
 }
 MACRO_WORDS = ["fed", "fomc", "inflation", "cpi", "dollar", "powell", "rate cut", "rate hike"]
@@ -32,7 +35,9 @@ NEWS_BLACKOUT_MIN = 45
 NEWS_FILTER = True
 FLOW_FILTER = True
 FOREX_SESSION = (7, 17)      # UTC hours; intraday forex strategies only fire inside this window
-ENABLED_STRATEGIES = None    # None = all, or e.g. {"Swing", "Trend", "Breakout"}
+# Default = only strategies with PF > 1.1 in backtest_results.txt. Re-run the backtest and edit this set.
+# Set to None to run everything (Swing, Quant, Price action, Scalping, Trend, Breakout, Mean reversion lost money).
+ENABLED_STRATEGIES = {"Position", "Intraday ORB", "Day trading", "Reversal"}
 
 # special strategies
 PAIRS = [("ETH-USD", "BTC-USD"), ("EURUSD=X", "GBPUSD=X"), ("GC=F", "SI=F")]

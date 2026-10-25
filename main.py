@@ -64,7 +64,14 @@ def scan():
         key = f"{name}|{sym}|{r.Index}{extra}"
         if (now - closed).total_seconds() / 60 > max_age or key in sent:
             return
-        found.setdefault(sym, []).append({**s, "strategy": name, "tf": tf, "entry": float(r.close), "key": key,
+        live = float(R[-1].close)                       # latest price, not the old signal-bar close
+        risk = abs(float(r.close) - s["sl"])
+        move = (live - float(r.close)) * s["side"]      # + = price already ran our way, - = against
+        if move > 0.5 * risk or move < -0.5 * risk:     # chased or already failing: stale signal
+            return
+        if abs(s["tp"] - live) < 1.2 * abs(live - s["sl"]):   # reward/risk from the real entry too thin
+            return
+        found.setdefault(sym, []).append({**s, "strategy": name, "tf": tf, "entry": live, "key": key,
                                           "hold_h": hold, "style": style})
 
     for sym, asset in WATCHLIST.items():
@@ -118,16 +125,18 @@ def scan():
             if NEWS_FILTER and s["strategy"] != "News" and ((s["side"] == 1 and sc <= -2) or (s["side"] == -1 and sc >= 2)):
                 continue
             keep.append(s)
-        fnotes, f = [], (flow_live.live_flow(sym) if asset == "crypto" else None)
+        flow_notes, f = {}, (flow_live.live_flow(sym) if asset == "crypto" else None)
         if f:
             for side in (1, -1):
                 ok, notes = flow_live.verdict("BUY" if side == 1 else "SELL", f)
                 if FLOW_FILTER and not ok:
                     keep = [s for s in keep if s["side"] != side]
-                elif side == 1:
-                    fnotes = notes
-        if not keep:
+                else:
+                    flow_notes[side] = notes
+        nb, ns = sum(s["side"] == 1 for s in keep), sum(s["side"] == -1 for s in keep)
+        if nb == ns:                                    # equal BUY and SELL (or none): no edge, stay out
             continue
+        fnotes = flow_notes.get(1 if nb > ns else -1, [])
         telegram.send(message(sym, keep, sc, top, fnotes, special.order_book(sym) if asset == "crypto" else None))
         feed.add(fd, sym, keep)
         for s in keep:
