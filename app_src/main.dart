@@ -10,7 +10,9 @@ void main() => runApp(const SignalApp());
 
 double num0(dynamic v) => (v as num?)?.toDouble() ?? 0;
 
-const cryptoPairs = {'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'SOL': 'SOLUSDT'};
+// Binance USDT-M perpetual futures: base coin -> contract symbol (filled from exchangeInfo, e.g. 'PEPE' -> '1000PEPEUSDT')
+final Map<String, String> futSymbols = {};
+const favorites = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'GOLD', 'SILVER', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'OIL'];
 const yahooPairs = {
   'GOLD': 'GC=F', 'SILVER': 'XAGUSD=X', 'EURUSD': 'EURUSD=X', 'GBPUSD': 'GBPUSD=X',
   'USDJPY': 'USDJPY=X', 'AUDUSD': 'AUDUSD=X', 'USDCAD': 'USDCAD=X', 'OIL': 'CL=F',
@@ -22,11 +24,23 @@ const yahooTf = {
 const tfList = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
 const mtfList = ['5m', '15m', '30m', '1h', '4h', '1d'];
 const fxPairs = {'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD'};
+int decimalsFor(String sym, double price) {
+  if (yahooPairs.containsKey(sym)) return decimals(sym);
+  if (price >= 1000) return 2;
+  if (price >= 10) return 3;
+  if (price >= 1) return 4;
+  if (price >= 0.1) return 5;
+  if (price >= 0.01) return 6;
+  return 8;
+}
+
+String fmtPrice(double p) => p.toStringAsFixed(decimalsFor('', p));
+
 int decimals(String sym) => sym == 'USDJPY' ? 3 : fxPairs.contains(sym) ? 5 : sym == 'SILVER' ? 3 : 2;
 
 String fmt(dynamic v) {
   final x = num0(v);
-  return x > 50 ? x.toStringAsFixed(2) : x.toStringAsFixed(5);
+  return x > 50 ? x.toStringAsFixed(2) : x >= 0.1 ? x.toStringAsFixed(5) : x.toStringAsFixed(8);
 }
 
 String ago(dynamic iso) {
@@ -39,6 +53,13 @@ String ago(dynamic iso) {
   return '${d.inDays} d ago';
 }
 
+
+class ScanRow {
+  final String coin;
+  final double price, change, volume;
+  final Analysis a;
+  ScanRow(this.coin, this.price, this.change, this.volume, this.a);
+}
 
 class Reading {
   final String name, value;
@@ -302,18 +323,20 @@ Analysis analyze(List<Candle> cs, int d) {
 }
 
 Future<List<Candle>> fetchCandles(String sym, String tf) async {
-  final cSym = cryptoPairs[sym];
-  if (cSym != null) {
-    final uri = Uri.https('api.binance.com', '/api/v3/klines', {'symbol': cSym, 'interval': tf, 'limit': '300'});
-    final r = await http.get(uri).timeout(const Duration(seconds: 15));
-    if (r.statusCode != 200) throw 'Market data unavailable (HTTP ${r.statusCode}).';
+  if (!yahooPairs.containsKey(sym)) {
+    final pair = futSymbols[sym] ?? '${sym}USDT';
+    final q = {'symbol': pair, 'interval': tf, 'limit': '300'};
+    var r = await http.get(Uri.https('fapi.binance.com', '/fapi/v1/klines', q)).timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) {
+      r = await http.get(Uri.https('api.binance.com', '/api/v3/klines', q)).timeout(const Duration(seconds: 15));   // spot fallback
+    }
+    if (r.statusCode != 200) throw 'Binance data unavailable for $sym (HTTP ${r.statusCode}). It may be blocked on your network.';
     return (jsonDecode(r.body) as List)
         .map((x) => Candle(DateTime.fromMillisecondsSinceEpoch((x[0] as num).toInt()), double.parse('${x[1]}'),
             double.parse('${x[2]}'), double.parse('${x[3]}'), double.parse('${x[4]}'), double.parse('${x[5]}')))
         .toList();
   }
-  final ySym = yahooPairs[sym];
-  if (ySym == null) throw 'Unknown symbol $sym';
+  final ySym = yahooPairs[sym]!;
   final cfg = yahooTf[tf] ?? ['1m', '1d'];
   final uri = Uri.https('query1.finance.yahoo.com', '/v8/finance/chart/$ySym', {'range': cfg[1], 'interval': cfg[0]});
   final r = await http.get(uri, headers: {'User-Agent': 'Mozilla/5.0'}).timeout(const Duration(seconds: 15));
@@ -396,6 +419,16 @@ class _HomeState extends State<Home> {
   bool mtfBusy = false;
   Timer? mtfTimer;
   String tfFilter = 'All';
+  String? futuresError;
+  List<ScanRow> scanRows = [];
+  List<Map<String, dynamic>> movers = [];
+  bool scanning = false, autoScan = false;
+  double scanProgress = 0;
+  String scanTf = '1h', scanFilter = 'All', scanSort = 'Strength';
+  int scanN = 50;
+  String? scanError;
+  DateTime? scanUpdated;
+  Timer? scanTimer;
 
   @override
   void initState() {
@@ -404,6 +437,7 @@ class _HomeState extends State<Home> {
     timer = Timer.periodic(const Duration(seconds: 30), (_) => load(silent: true));
     loadMarket();
     marketTimer = Timer.periodic(const Duration(seconds: 1), (_) => loadMarket(silent: true));
+    loadFutures();
     loadMtf();
     mtfTimer = Timer.periodic(const Duration(seconds: 30), (_) => loadMtf());
   }
@@ -413,6 +447,7 @@ class _HomeState extends State<Home> {
     timer?.cancel();
     marketTimer?.cancel();
     mtfTimer?.cancel();
+    scanTimer?.cancel();
     super.dispose();
   }
 
@@ -441,6 +476,132 @@ class _HomeState extends State<Home> {
     }
   }
 
+  Future<void> loadFutures() async {
+    try {
+      final r = await http.get(Uri.https('fapi.binance.com', '/fapi/v1/exchangeInfo')).timeout(const Duration(seconds: 25));
+      if (r.statusCode != 200) throw 'HTTP ${r.statusCode}';
+      final syms = jsonDecode(r.body)['symbols'] as List;
+      final m = <String, String>{};
+      for (final x in syms) {
+        if (x['contractType'] == 'PERPETUAL' && x['quoteAsset'] == 'USDT' && x['status'] == 'TRADING') {
+          m['${x['baseAsset']}'] = '${x['symbol']}';
+        }
+      }
+      futSymbols
+        ..clear()
+        ..addAll(m);
+      futuresError = null;
+    } catch (e) {
+      futuresError = 'Could not load the Binance futures coin list ($e). Binance may be blocked on your network.';
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<List<Map<String, dynamic>>> fetchTickers() async {
+    final r = await http.get(Uri.https('fapi.binance.com', '/fapi/v1/ticker/24hr')).timeout(const Duration(seconds: 25));
+    if (r.statusCode != 200) throw 'Binance futures unavailable (HTTP ${r.statusCode}).';
+    final base = {for (final e in futSymbols.entries) e.value: e.key};
+    final out = <Map<String, dynamic>>[];
+    for (final t in jsonDecode(r.body) as List) {
+      final coin = base['${t['symbol']}'];
+      if (coin == null) continue;
+      out.add({
+        'coin': coin,
+        'price': double.tryParse('${t['lastPrice']}') ?? 0.0,
+        'chg': double.tryParse('${t['priceChangePercent']}') ?? 0.0,
+        'vol': double.tryParse('${t['quoteVolume']}') ?? 0.0,
+      });
+    }
+    out.sort((a, b) => (b['vol'] as double).compareTo(a['vol'] as double));
+    return out;
+  }
+
+  Future<void> runScan() async {
+    if (scanning) return;
+    setState(() { scanning = true; scanError = null; scanProgress = 0; });
+    try {
+      if (futSymbols.isEmpty) await loadFutures();
+      if (futSymbols.isEmpty) throw futuresError ?? 'No futures coins loaded.';
+      final tickers = await fetchTickers();
+      movers = tickers;
+      final top = tickers.take(scanN).toList();
+      final rows = <ScanRow>[];
+      for (var i = 0; i < top.length; i += 8) {
+        final batch = top.skip(i).take(8).toList();
+        final res = await Future.wait(batch.map<Future<ScanRow?>>((t) async {
+          try {
+            final cs = await fetchCandles(t['coin'] as String, scanTf);
+            if (cs.length < 35) return null;
+            return ScanRow(t['coin'] as String, cs.last.close, t['chg'] as double, t['vol'] as double, analyze(cs, 2));
+          } catch (_) {
+            return null;
+          }
+        }));
+        rows.addAll(res.whereType<ScanRow>());
+        if (mounted) setState(() => scanProgress = math.min(1.0, (i + 8) / top.length));
+      }
+      scanRows = rows;
+      scanUpdated = DateTime.now();
+    } catch (e) {
+      scanError = '$e';
+    } finally {
+      scanning = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  void openCoin(String coin, String tf, BuildContext ctx) {
+    setState(() { marketSymbol = coin; marketInterval = tf; mtf = {}; });
+    loadMarket();
+    loadMtf();
+    DefaultTabController.of(ctx).animateTo(0);
+  }
+
+  Future<void> pickCoin() async {
+    if (futSymbols.isEmpty) await loadFutures();
+    if (!mounted) return;
+    final coins = futSymbols.keys.toList()..sort();
+    var q = '';
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setM) {
+        final shown = coins.where((c) => c.contains(q.toUpperCase())).toList();
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * .75,
+              child: Column(children: [
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: TextField(
+                    autofocus: true,
+                    decoration: InputDecoration(prefixIcon: const Icon(Icons.search), hintText: 'Search ${coins.length} Binance futures coins', border: const OutlineInputBorder()),
+                    onChanged: (v) => setM(() => q = v),
+                  ),
+                ),
+                Expanded(
+                  child: coins.isEmpty
+                      ? Center(child: Padding(padding: const EdgeInsets.all(20), child: Text(futuresError ?? 'No coins loaded.')))
+                      : ListView.builder(
+                          itemCount: shown.length,
+                          itemBuilder: (_, i) => ListTile(dense: true, title: Text(shown[i]), subtitle: Text(futSymbols[shown[i]] ?? ''), onTap: () => Navigator.pop(ctx, shown[i])),
+                        ),
+                ),
+              ]),
+            ),
+          ),
+        );
+      }),
+    );
+    if (choice != null) {
+      setState(() { marketSymbol = choice; mtf = {}; });
+      loadMarket();
+      loadMtf();
+    }
+  }
+
   Future<void> loadMtf() async {
     if (mtfBusy) return;
     mtfBusy = true;
@@ -449,7 +610,7 @@ class _HomeState extends State<Home> {
       final res = await Future.wait(mtfList.map<Future<Analysis?>>((tf) async {
         try {
           final cs = await fetchCandles(sym, tf);
-          return cs.length >= 35 ? analyze(cs, decimals(sym)) : null;
+          return cs.length >= 35 ? analyze(cs, decimalsFor(sym, cs.last.close)) : null;
         } catch (_) {
           return null;
         }
@@ -499,13 +660,16 @@ class _HomeState extends State<Home> {
     final nowMin = pkt.hour*60 + pkt.minute;
     bool isOpen(Map<String,dynamic> x) { final a=x['start'] as int, b=x['end'] as int; return a < b ? nowMin >= a && nowMin < b : nowMin >= a || nowMin < b; }
     return RefreshIndicator(onRefresh: loadMarket, child: ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(12), children: [
-      Wrap(spacing: 8, children: [for (final a in ['BTC','ETH','SOL','GOLD','SILVER','EURUSD','GBPUSD','USDJPY','AUDUSD','USDCAD','OIL']) ChoiceChip(label: Text(a), selected: marketSymbol==a, onSelected: (_) { setState(() { marketSymbol=a; mtf = {}; }); loadMarket(); loadMtf(); })]),
+      Wrap(spacing: 8, runSpacing: 4, children: [
+        ActionChip(avatar: const Icon(Icons.search, size: 18), label: Text(futSymbols.isEmpty ? 'All futures coins' : 'All coins (${futSymbols.length})'), onPressed: pickCoin),
+        for (final a in {...favorites, marketSymbol}) ChoiceChip(label: Text(a), selected: marketSymbol == a, onSelected: (_) { setState(() { marketSymbol = a; mtf = {}; }); loadMarket(); loadMtf(); }),
+      ]),
       const SizedBox(height: 10),
       Wrap(spacing: 8, children: [for (final tf in tfList) ChoiceChip(label: Text(tf), selected: marketInterval==tf, onSelected: (_) { setState(() => marketInterval=tf); loadMarket(); })]),
       const SizedBox(height: 10),
       Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(marketSymbol, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-        Text(price == null ? 'Price unavailable' : '${fxPairs.contains(marketSymbol) ? '' : '\$'}${price.toStringAsFixed(decimals(marketSymbol))}', style: const TextStyle(fontSize: 27, fontWeight: FontWeight.w700)),
+        Text(price == null ? 'Price unavailable' : '${fxPairs.contains(marketSymbol) ? '' : '\$'}${price.toStringAsFixed(decimalsFor(marketSymbol, price))}', style: const TextStyle(fontSize: 27, fontWeight: FontWeight.w700)),
         Text('Free public data • Last update: ${marketUpdated == null ? 'not yet' : ago(marketUpdated!.toIso8601String())}'),
         const SizedBox(height: 12),
         if (marketLoading) const LinearProgressIndicator(),
@@ -560,7 +724,7 @@ class _HomeState extends State<Home> {
   }
 
   Widget _indicatorPanel(List<Candle> all) {
-    final d = decimals(marketSymbol);
+    final d = decimalsFor(marketSymbol, all.last.close);
     final a = analyze(all, d);
     final col = a.side == 1 ? Colors.green : a.side == -1 ? Colors.red : Colors.grey;
     String f(double v) => v.isNaN || v.isInfinite ? 'N/A' : v.toStringAsFixed(d);
@@ -617,6 +781,73 @@ class _HomeState extends State<Home> {
         padding: const EdgeInsets.all(24),
         child: Text(text, textAlign: TextAlign.center),
       );
+
+  Widget scannerTab() {
+    final rows = scanRows.where((r) => scanFilter == 'All' || (scanFilter == 'BUY' && r.a.side == 1) || (scanFilter == 'SELL' && r.a.side == -1)).toList();
+    if (scanSort == 'Strength') {
+      rows.sort((a, b) => b.a.score.abs().compareTo(a.a.score.abs()));
+    } else if (scanSort == '24h %') {
+      rows.sort((a, b) => b.change.abs().compareTo(a.change.abs()));
+    } else {
+      rows.sort((a, b) => b.volume.compareTo(a.volume));
+    }
+    final gain = [...movers]..sort((a, b) => (b['chg'] as double).compareTo(a['chg'] as double));
+    final lose = [...movers]..sort((a, b) => (a['chg'] as double).compareTo(b['chg'] as double));
+    Color col(int side) => side == 1 ? Colors.green : side == -1 ? Colors.red : Colors.grey;
+    return Builder(builder: (ctx) {
+      return RefreshIndicator(
+        onRefresh: runScan,
+        child: ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(12), children: [
+          Text('Binance Futures scanner', style: Theme.of(ctx).textTheme.titleMedium),
+          Text(futSymbols.isEmpty ? (futuresError ?? 'Loading the coin list...') : '${futSymbols.length} USDT perpetual coins. Scans the most active ones with all indicators.', style: const TextStyle(fontSize: 12)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, children: [for (final t in ['5m', '15m', '30m', '1h', '4h', '1d']) ChoiceChip(label: Text(t), selected: scanTf == t, onSelected: (_) => setState(() => scanTf = t))]),
+          Wrap(spacing: 8, children: [
+            for (final n in [20, 50, 100, 999]) ChoiceChip(label: Text(n == 999 ? 'All coins' : 'Top $n'), selected: scanN == n, onSelected: (_) => setState(() => scanN = n)),
+          ]),
+          Wrap(spacing: 8, children: [for (final f in ['All', 'BUY', 'SELL']) ChoiceChip(label: Text(f), selected: scanFilter == f, onSelected: (_) => setState(() => scanFilter = f))]),
+          Wrap(spacing: 8, children: [for (final f in ['Strength', '24h %', 'Volume']) ChoiceChip(label: Text('Sort: $f'), selected: scanSort == f, onSelected: (_) => setState(() => scanSort = f))]),
+          Row(children: [
+            ElevatedButton.icon(onPressed: scanning ? null : runScan, icon: const Icon(Icons.radar), label: Text(scanning ? 'Scanning...' : 'Scan now')),
+            const SizedBox(width: 12),
+            const Text('Auto 60s'),
+            Switch(value: autoScan, onChanged: (v) {
+              setState(() => autoScan = v);
+              scanTimer?.cancel();
+              if (v) {
+                runScan();
+                scanTimer = Timer.periodic(const Duration(seconds: 60), (_) => runScan());
+              }
+            }),
+          ]),
+          if (scanning) LinearProgressIndicator(value: scanProgress == 0 ? null : scanProgress),
+          if (scanError != null) Padding(padding: const EdgeInsets.all(8), child: Text(scanError!, style: const TextStyle(color: Colors.orange))),
+          if (scanUpdated != null) Text('Scanned ${rows.length} coins on $scanTf, ${ago(scanUpdated!.toIso8601String())}', style: const TextStyle(fontSize: 12)),
+          if (movers.isNotEmpty)
+            Card(child: Padding(padding: const EdgeInsets.all(12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('24h movers (all ${movers.length} coins)', style: const TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              Wrap(spacing: 6, runSpacing: 4, children: [
+                for (final m in gain.take(6)) ActionChip(label: Text('${m['coin']} +${(m['chg'] as double).toStringAsFixed(1)}%', style: const TextStyle(color: Colors.green)), onPressed: () => openCoin('${m['coin']}', scanTf, ctx)),
+              ]),
+              Wrap(spacing: 6, runSpacing: 4, children: [
+                for (final m in lose.take(6)) ActionChip(label: Text('${m['coin']} ${(m['chg'] as double).toStringAsFixed(1)}%', style: const TextStyle(color: Colors.red)), onPressed: () => openCoin('${m['coin']}', scanTf, ctx)),
+              ]),
+            ]))),
+          if (scanRows.isEmpty && !scanning) const Padding(padding: EdgeInsets.all(24), child: Text('Tap Scan now to check every coin on the timeframe you picked.', textAlign: TextAlign.center)),
+          for (final r in rows)
+            ListTile(
+              dense: true,
+              onTap: () => openCoin(r.coin, scanTf, ctx),
+              title: Text('${r.coin}   ${fmtPrice(r.price)}', style: const TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Text('24h ${r.change >= 0 ? '+' : ''}${r.change.toStringAsFixed(1)}%  |  Buy ${r.a.buys} / Neutral ${r.a.neutrals} / Sell ${r.a.sells}'),
+              trailing: Text(r.a.verdict, style: TextStyle(fontWeight: FontWeight.bold, color: col(r.a.side))),
+            ),
+          const Padding(padding: EdgeInsets.only(top: 8), child: Text('Verdicts come from about 21 indicators on the loaded candles. Not a guaranteed signal. Tap a coin to open its chart.', style: TextStyle(fontSize: 11))),
+        ]),
+      );
+    });
+  }
 
   Widget signalsTab() {
     if (data == null) {
@@ -749,7 +980,7 @@ class _HomeState extends State<Home> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 4,
+      length: 5,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Signal Bot'),
@@ -764,6 +995,7 @@ class _HomeState extends State<Home> {
           ],
           bottom: const TabBar(isScrollable: true, tabs: [
             Tab(text: 'Markets'),
+            Tab(text: 'Scanner'),
             Tab(text: 'Signals'),
             Tab(text: 'Account'),
             Tab(text: 'Report'),
@@ -777,7 +1009,7 @@ class _HomeState extends State<Home> {
                 child: Text('Updated ${ago(data!['updated'])}', style: const TextStyle(fontSize: 12)),
               ),
             Expanded(
-              child: TabBarView(children: [marketTab(), signalsTab(), accountTab(), reportTab()]),
+              child: TabBarView(children: [marketTab(), scannerTab(), signalsTab(), accountTab(), reportTab()]),
             ),
             const Padding(
               padding: EdgeInsets.all(6),
@@ -822,8 +1054,8 @@ class CandlePainter extends CustomPainter {
       canvas.drawRect(rect,Paint()..color=color);
     }
     final tp=TextPainter(textDirection: TextDirection.ltr);
-    tp.text=TextSpan(text:maxV.toStringAsFixed(maxV>100?2:4),style:TextStyle(fontSize:10,color:dark?Colors.white70:Colors.black54)); tp.layout(); tp.paint(canvas,Offset(2,0));
-    tp.text=TextSpan(text:minV.toStringAsFixed(minV>100?2:4),style:TextStyle(fontSize:10,color:dark?Colors.white70:Colors.black54)); tp.layout(); tp.paint(canvas,Offset(2,size.height-14));
+    tp.text=TextSpan(text:fmtPrice(maxV),style:TextStyle(fontSize:10,color:dark?Colors.white70:Colors.black54)); tp.layout(); tp.paint(canvas,Offset(2,0));
+    tp.text=TextSpan(text:fmtPrice(minV),style:TextStyle(fontSize:10,color:dark?Colors.white70:Colors.black54)); tp.layout(); tp.paint(canvas,Offset(2,size.height-14));
   }
   @override
   bool shouldRepaint(covariant CandlePainter oldDelegate) => oldDelegate.candles != candles || oldDelegate.dark != dark;
