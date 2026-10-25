@@ -240,9 +240,20 @@ class _HomeState extends State<Home> {
   }
 
   Widget _indicatorRow(String name, String value, Color? color) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 5),
-    child: Row(children: [Expanded(child: Text(name)), Flexible(child: Text(value, textAlign: TextAlign.end, style: TextStyle(fontWeight: FontWeight.w600, color: color)))],
-  );
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(
+          children: [
+            Expanded(child: Text(name)),
+            Flexible(
+              child: Text(
+                value,
+                textAlign: TextAlign.end,
+                style: TextStyle(fontWeight: FontWeight.w600, color: color),
+              ),
+            ),
+          ],
+        ),
+      );
 
   Widget wrap(List<Widget> children) {
     return RefreshIndicator(
