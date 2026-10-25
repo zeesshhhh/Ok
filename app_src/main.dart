@@ -1016,7 +1016,8 @@ class AppTrade {
   final int id, side, buys, sells, neutrals, mood;
   final String coin, tf, source, verdict;
   final double entry, sl, tp, score, riskCash;
-  final double? adx, atrPct;
+  final double? adx, atrPct, rvol, ext;
+  final int quality, htfAgree, btc;
   final DateTime opened;
   String status = 'open', reason = '';
   double mfe = 0, mae = 0, exitPx = 0, r = 0;
@@ -1026,7 +1027,8 @@ class AppTrade {
   AppTrade({required this.id, required this.coin, required this.tf, required this.source, required this.verdict,
       required this.side, required this.buys, required this.sells, required this.neutrals, required this.mood,
       required this.entry, required this.sl, required this.tp, required this.score, required this.riskCash,
-      required this.adx, required this.atrPct, required this.opened});
+      required this.adx, required this.atrPct, required this.opened,
+      this.rvol, this.ext, this.quality = 0, this.htfAgree = 0, this.btc = 0});
 
   bool get isOpen => status == 'open';
   double get riskPx => (entry - sl).abs();
@@ -1039,6 +1041,7 @@ class AppTrade {
         'risk': riskCash, 'adx': cleanNum(adx), 'atrPct': cleanNum(atrPct), 'opened': opened.toIso8601String(),
         'status': status, 'reason': reason, 'mfe': mfe, 'mae': mae, 'exit': exitPx, 'r': r, 'amb': ambiguous,
         'closed': closed?.toIso8601String(),
+        'rvol': cleanNum(rvol), 'ext': cleanNum(ext), 'q': quality, 'htf': htfAgree, 'btc': btc,
       };
 
   factory AppTrade.fromJson(Map<String, dynamic> j) {
@@ -1049,6 +1052,8 @@ class AppTrade {
       mood: (j['mood'] as num?)?.toInt() ?? 0, entry: num0(j['entry']), sl: num0(j['sl']), tp: num0(j['tp']),
       score: num0(j['score']), riskCash: num0(j['risk']), adx: (j['adx'] as num?)?.toDouble(),
       atrPct: (j['atrPct'] as num?)?.toDouble(), opened: DateTime.tryParse('${j['opened']}') ?? DateTime.now(),
+      rvol: (j['rvol'] as num?)?.toDouble(), ext: (j['ext'] as num?)?.toDouble(), quality: (j['q'] as num?)?.toInt() ?? 0,
+      htfAgree: (j['htf'] as num?)?.toInt() ?? 0, btc: (j['btc'] as num?)?.toInt() ?? 0,
     );
     t.status = '${j['status'] ?? 'open'}';
     t.reason = '${j['reason'] ?? ''}';
@@ -1129,7 +1134,8 @@ String csvCell(dynamic v) {
 String tradesToCsv(List<AppTrade> trades) {
   const cols = ['id', 'status', 'opened_utc', 'closed_utc', 'hours_held', 'symbol', 'strategy', 'tf', 'side', 'verdict', 'score',
     'entry', 'sl', 'tp', 'risk_pct', 'planned_rr', 'exit_price', 'exit_reason', 'same_candle_sl_tp', 'r_multiple', 'pnl_usd',
-    'mfe_r', 'mae_r', 'buys', 'neutrals', 'sells', 'adx', 'atr_pct', 'news_mood', 'hour_utc', 'weekday'];
+    'mfe_r', 'mae_r', 'buys', 'neutrals', 'sells', 'adx', 'atr_pct', 'news_mood', 'hour_utc', 'weekday',
+    'quality', 'htf_agree', 'rvol', 'ext_atr', 'btc_regime'];
   String r(double? v, int n) => v == null ? '' : v.toStringAsFixed(n);
   final out = StringBuffer(cols.join(',')).toString();
   final lines = <String>[out];
@@ -1143,8 +1149,139 @@ String tradesToCsv(List<AppTrade> trades) {
       t.entry, t.sl, t.tp, r(t.entry == 0 ? null : t.riskPx / t.entry * 100, 3), r(t.plannedRr, 2),
       done ? t.exitPx : '', done ? t.reason : '', done ? t.ambiguous : '', done ? r(t.r, 3) : '', done ? r(t.pnl, 2) : '',
       r(t.mfe, 2), r(t.mae, 2), t.buys, t.neutrals, t.sells, r(t.adx, 1), r(t.atrPct, 3), t.mood, u.hour, u.weekday,
+      t.quality, t.htfAgree, r(t.rvol, 2), r(t.ext, 2), t.btc,
     ];
     lines.add(row.map(csvCell).join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+// ---------- durable storage (files in the app's own folder, plus SharedPreferences as a fallback) ----------
+Future<String?> readStore(String name) async {
+  try {
+    final d = await getApplicationDocumentsDirectory();
+    final f = File('${d.path}/$name');
+    if (await f.exists()) return await f.readAsString();
+  } catch (_) {}
+  return null;
+}
+
+Future<bool> writeStore(String name, String text) async {
+  try {
+    final d = await getApplicationDocumentsDirectory();
+    final tmp = File('${d.path}/$name.tmp');
+    await tmp.writeAsString(text, flush: true);
+    await tmp.rename('${d.path}/$name');         // write then rename, so a crash never leaves half a file
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// ---------- Signal Lab: scores every indicator and every trading style against what price did next ----------
+const labHorizonBars = 6;       // judged 6 candles after the signal
+const labRaceAtr = 1.5;         // target and stop distance for the race test, in ATR
+
+String styleOf(String tf) => (tf == '1m' || tf == '5m' || tf == '15m') ? 'Scalping' : (tf == '30m' || tf == '1h') ? 'Intraday' : tf == '4h' ? 'Swing' : 'Position';
+
+int barMs(String tf) => (const {'1m': 1, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '4h': 240, '1d': 1440}[tf] ?? 60) * 60000;
+
+String categoryOf(String n) {
+  const trend = ['EMA', 'SMA', 'Supertrend', 'Parabolic', 'Ichimoku', 'Hull', 'Linear regression', 'Heikin', 'Chandelier', 'Aroon', 'Vortex', 'ADX', 'TRIX'];
+  const vol = ['VWAP', 'VWMA', 'MFI', 'OBV', 'Chaikin', 'Last closed candle volume'];
+  const brk = ['Bollinger', 'Donchian', 'Keltner', 'Squeeze'];
+  const sr = ['Support', 'Fib', 'Pivot'];
+  if (n.startsWith('OVERALL')) return 'Overall verdict';
+  if (n.startsWith('Candle pattern')) return 'Candle patterns';
+  if (vol.any(n.startsWith)) return 'Volume';
+  if (brk.any(n.startsWith)) return 'Breakout / volatility';
+  if (sr.any(n.startsWith)) return 'Support / resistance';
+  if (trend.any(n.startsWith)) return 'Trend';
+  return 'Momentum / oscillators';
+}
+
+class LabSnap {
+  final String coin, tf;
+  final DateTime t0;               // when the signal candle closed
+  final double price, atr;
+  final Map<String, int> votes;    // indicator name -> +1 buy / -1 sell (neutral votes are not stored)
+  double move = 0;                 // price change after the horizon, in ATR
+  int race = 0;                    // +1 reached +1.5 ATR first, -1 reached -1.5 ATR first, 0 neither or same candle
+  LabSnap(this.coin, this.tf, this.t0, this.price, this.atr, this.votes);
+  Map<String, dynamic> toJson() => {'c': coin, 'tf': tf, 't': t0.millisecondsSinceEpoch, 'p': price, 'a': atr, 'v': votes, 'm': move, 'r': race};
+  factory LabSnap.fromJson(Map<String, dynamic> j) {
+    final x = LabSnap('${j['c']}', '${j['tf']}', DateTime.fromMillisecondsSinceEpoch((j['t'] as num).toInt()), num0(j['p']), num0(j['a']),
+        {for (final e in (j['v'] as Map).entries) '${e.key}': (e.value as num).toInt()});
+    x.move = num0(j['m']);
+    x.race = (j['r'] as num?)?.toInt() ?? 0;
+    return x;
+  }
+}
+
+/// 0 = not ready yet, 1 = scored, 2 = discard (history no longer reaches back far enough)
+int evalSnap(LabSnap s, List<Candle> cs) {
+  final bar = barMs(s.tf);
+  final end = s.t0.add(Duration(milliseconds: bar * labHorizonBars));
+  if (DateTime.now().isBefore(end)) return 0;
+  if (cs.isEmpty || cs.first.time.isAfter(s.t0)) return 2;
+  final up = s.price + labRaceAtr * s.atr, dn = s.price - labRaceAtr * s.atr;
+  var race = 0, decided = false;
+  double? closeH;
+  for (final c in cs) {
+    if (c.time.isBefore(s.t0)) continue;
+    if (c.time.add(Duration(milliseconds: bar)).isAfter(end)) break;
+    if (!decided) {
+      final hu = c.high >= up, hd = c.low <= dn;
+      if (hu && !hd) { race = 1; decided = true; }
+      else if (hd && !hu) { race = -1; decided = true; }
+      else if (hu && hd) { race = 0; decided = true; }     // both in one candle: unknowable, counts as neither
+    }
+    closeH = c.close;
+  }
+  if (closeH == null) return 2;
+  s.move = s.atr > 0 ? (closeH - s.price) / s.atr : 0;
+  s.race = race;
+  return 1;
+}
+
+/// aggregate row: [n, directionHits, raceWins, raceLosses, sumSignedMoveAtr]
+void labAdd(Map<String, List<double>> agg, LabSnap s) {
+  final style = styleOf(s.tf);
+  s.votes.forEach((name, sig) {
+    for (final key in ['$name|$style', '$name|All']) {
+      final a = agg.putIfAbsent(key, () => [0, 0, 0, 0, 0]);
+      a[0]++;
+      if (s.move * sig > 0) a[1]++;
+      if (s.race == sig) {
+        a[2]++;
+      } else if (s.race == -sig) {
+        a[3]++;
+      }
+      a[4] += s.move * sig;
+    }
+  });
+}
+
+String labAggCsv(Map<String, List<double>> agg) {
+  final lines = ['indicator,category,style,signals,direction_accuracy_pct,race_wins,race_losses,race_win_pct,avg_move_atr'];
+  final keys = agg.keys.toList()..sort();
+  for (final k in keys) {
+    final a = agg[k]!, i = k.lastIndexOf('|');
+    final name = k.substring(0, i), style = k.substring(i + 1);
+    final den = a[2] + a[3];
+    lines.add([csvCell(name), csvCell(categoryOf(name)), style, a[0].toInt(), (100 * a[1] / a[0]).toStringAsFixed(1), a[2].toInt(), a[3].toInt(),
+      den > 0 ? (100 * a[2] / den).toStringAsFixed(1) : '', (a[4] / a[0]).toStringAsFixed(3)].join(','));
+  }
+  return lines.join('\n') + '\n';
+}
+
+String labRowsCsv(List<LabSnap> rows) {
+  final names = <String>{for (final r in rows) ...r.votes.keys}.toList()..sort();
+  final head = ['time_utc', 'coin', 'tf', 'style', 'price', 'atr', 'move_atr', 'race', ...names.map(csvCell)];
+  final lines = [head.join(',')];
+  for (final r in rows) {
+    lines.add([r.t0.toUtc().toIso8601String(), r.coin, r.tf, styleOf(r.tf), r.price, r.atr, r.move.toStringAsFixed(3), r.race,
+      ...names.map((n) => r.votes[n] ?? 0)].join(','));
   }
   return lines.join('\n') + '\n';
 }
@@ -1220,8 +1357,26 @@ class _HomeState extends State<Home> {
   List<AppTrade> trades = [];
   bool autoPaper = false, paperBusy = false;
   double paperMinScore = 0.35;
-  int paperMaxOpen = 10;
+  int paperMaxOpen = 40, paperMinQ = 3, paperRejected = 0, paperCoins = 100;
+  Set<String> paperTfs = {'5m', '15m', '30m', '1h', '4h', '1d'};
+  bool paperScanBusy = false;
+  final Map<String, int> paperLogged = {};     // coin|tf -> candle close already handled
+  List<String> paperCoinList = [];
+  DateTime paperCoinsAt = DateTime(2000);
+  String paperStatus = '';
+  final Map<String, Analysis?> _htfCache = {};
+  DateTime _htfCacheAt = DateTime(2000);
   Timer? paperTimer;
+  bool paperLoaded = false;
+  // Signal Lab
+  List<LabSnap> labPending = [], labRows = [];
+  Map<String, List<double>> labAgg = {};
+  Map<String, int> labLogged = {};
+  bool labOn = false, labBusy = false, labLoaded = false, lab5m = false;
+  int labCoins = 20, labScored = 0;
+  String labStyle = 'All', labCat = 'All', labStatus = '';
+  DateTime? labUpdated;
+  Timer? labTimer;
 
   @override
   void initState() {
@@ -1239,7 +1394,12 @@ class _HomeState extends State<Home> {
     loadMtf();
     mtfTimer = Timer.periodic(const Duration(seconds: 30), (_) => loadMtf());
     loadPaper();
-    paperTimer = Timer.periodic(const Duration(seconds: 60), (_) => checkPaper());
+    paperTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      checkPaper();
+      paperScanCycle();
+    });
+    loadLab();
+    labTimer = Timer.periodic(const Duration(seconds: 60), (_) => labCycle());
   }
 
   @override
@@ -1251,6 +1411,7 @@ class _HomeState extends State<Home> {
     newsTimer?.cancel();
     alertTimer?.cancel();
     paperTimer?.cancel();
+    labTimer?.cancel();
     super.dispose();
   }
 
@@ -1328,67 +1489,393 @@ class _HomeState extends State<Home> {
     }
   }
 
+  // ---------- Signal Lab ----------
+  List<String> get labTfs => [if (lab5m) '5m', '15m', '1h', '4h', '1d'];
+
+  Future<void> loadLab() async {
+    try {
+      final raw = await readStore('lab.json');
+      if (raw != null) {
+        final j = jsonDecode(raw) as Map<String, dynamic>;
+        labOn = j['on'] == true;
+        lab5m = j['m5'] == true;
+        labCoins = (j['coins'] as num?)?.toInt() ?? 20;
+        labScored = (j['scored'] as num?)?.toInt() ?? 0;
+        labAgg = {for (final e in (j['agg'] as Map).entries) '${e.key}': (e.value as List).map((x) => (x as num).toDouble()).toList()};
+        labPending = (j['pending'] as List).map((e) => LabSnap.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+        labRows = (j['rows'] as List).map((e) => LabSnap.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+        labLogged = {for (final e in (j['logged'] as Map).entries) '${e.key}': (e.value as num).toInt()};
+      }
+      labLoaded = true;
+    } catch (_) {
+      final raw = await readStore('lab.json');
+      if (raw != null) await writeStore('lab_unreadable_backup.json', raw);
+      labStatus = 'Saved lab data could not be read. A backup copy was kept and collecting is paused.';
+    }
+    if (mounted) setState(() {});
+    if (labOn && labLoaded) labCycle();
+  }
+
+  Future<void> saveLab() async {
+    if (!labLoaded) return;
+    if (labRows.length > 1500) labRows = labRows.sublist(labRows.length - 1500);
+    if (labPending.length > 4000) labPending = labPending.sublist(labPending.length - 4000);
+    await writeStore('lab.json', jsonEncode({
+      'on': labOn, 'm5': lab5m, 'coins': labCoins, 'scored': labScored, 'agg': labAgg,
+      'pending': labPending.map((e) => e.toJson()).toList(), 'rows': labRows.map((e) => e.toJson()).toList(), 'logged': labLogged,
+    }));
+  }
+
+  Future<void> setLabOn(bool v) async {
+    setState(() => labOn = v);
+    await saveLab();
+    if (v) labCycle();
+  }
+
+  Future<void> labCycle() async {
+    if (!labOn || labBusy || !labLoaded) return;
+    labBusy = true;
+    if (mounted) setState(() => labStatus = 'Working...');
+    try {
+      if (futSymbols.isEmpty) await loadFutures();
+      var coins = movers.map((m) => '${m['coin']}').take(labCoins).toList();
+      if (coins.isEmpty && futSymbols.isNotEmpty) {
+        movers = await fetchTickers();
+        coins = movers.map((m) => '${m['coin']}').take(labCoins).toList();
+      }
+      if (coins.isEmpty) throw futuresError ?? 'No coin list yet';
+      if (!coins.contains('BTC')) coins.insert(0, 'BTC');
+      final now = DateTime.now();
+
+      // 1) score signals whose horizon has passed
+      final due = <String, List<LabSnap>>{};
+      for (final sn in labPending) {
+        if (now.isAfter(sn.t0.add(Duration(milliseconds: barMs(sn.tf) * labHorizonBars)))) {
+          due.putIfAbsent('${sn.coin}|${sn.tf}', () => []).add(sn);
+        }
+      }
+      final done = <LabSnap>{};
+      final keys = due.keys.toList();
+      for (var i = 0; i < keys.length; i += 6) {
+        await Future.wait(keys.skip(i).take(6).map((k) async {
+          final parts = k.split('|');
+          try {
+            final cs = await fetchCandles(parts[0], parts[1]);
+            for (final sn in due[k]!) {
+              final r = evalSnap(sn, cs);
+              if (r == 1) {
+                labAdd(labAgg, sn);
+                labRows.add(sn);
+                labScored++;
+                done.add(sn);
+              } else if (r == 2) {
+                done.add(sn);
+              }
+            }
+          } catch (_) {}
+        }));
+      }
+      labPending.removeWhere(done.contains);
+
+      // 2) log a snapshot of every indicator for each coin and timeframe whose newest candle just closed
+      final jobs = <List<String>>[];
+      for (final c in coins) {
+        for (final tf in labTfs) {
+          final last = labLogged['$c|$tf'];
+          if (last != null && now.millisecondsSinceEpoch < last + barMs(tf)) continue;
+          jobs.add([c, tf]);
+        }
+      }
+      var added = 0;
+      for (var i = 0; i < jobs.length; i += 6) {
+        final res = await Future.wait(jobs.skip(i).take(6).map<Future<LabSnap?>>((j) async {
+          try {
+            final cs = await fetchCandles(j[0], j[1]);
+            if (cs.length < 61) return null;
+            final closed = cs.sublist(0, cs.length - 1);
+            final t0 = closed.last.time.add(Duration(milliseconds: barMs(j[1])));
+            if (labLogged['${j[0]}|${j[1]}'] == t0.millisecondsSinceEpoch) return null;
+            final a = analyze(closed, 2);
+            if (a.atr.isNaN || a.atr <= 0) return null;
+            final votes = <String, int>{};
+            for (final r in [...a.ma, ...a.osc]) {
+              if (r.sig != 0) votes[r.name] = r.sig;
+            }
+            if (a.side != 0) votes['OVERALL verdict'] = a.side;
+            if (a.score.abs() >= .5) votes['OVERALL strong verdict'] = a.side;
+            return LabSnap(j[0], j[1], t0, closed.last.close, a.atr, votes)..move = t0.millisecondsSinceEpoch.toDouble();
+          } catch (_) {
+            return null;
+          }
+        }));
+        for (final sn in res.whereType<LabSnap>()) {
+          labLogged['${sn.coin}|${sn.tf}'] = sn.move.toInt();     // temporarily carried the candle time here
+          sn.move = 0;
+          labPending.add(sn);
+          added++;
+        }
+      }
+      labUpdated = DateTime.now();
+      labStatus = 'Last run: logged $added new signal sets, ${labPending.length} waiting to be scored, $labScored scored in total.';
+      await saveLab();
+    } catch (e) {
+      labStatus = 'Lab could not run: $e';
+    } finally {
+      labBusy = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> shareLabAcc() async {
+    if (labAgg.isEmpty) return toast('Nothing scored yet. The first results appear about ${labHorizonBars} candles after the first signals.');
+    final f = await _writeTemp('lab_indicator_accuracy.csv', labAggCsv(labAgg));
+    if (f != null) await Share.shareXFiles([XFile(f.path, mimeType: 'text/csv')], subject: 'Indicator accuracy');
+  }
+
+  Future<void> shareLabRows() async {
+    if (labRows.isEmpty) return toast('Nothing scored yet.');
+    final f = await _writeTemp('lab_signal_snapshots.csv', labRowsCsv(labRows));
+    if (f != null) await Share.shareXFiles([XFile(f.path, mimeType: 'text/csv')], subject: 'Signal snapshots');
+  }
+
+  Future<void> resetLab() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset the Lab?'),
+        content: const Text('Deletes all collected and scored indicator data.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Reset')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      labPending = [];
+      labRows = [];
+      labAgg = {};
+      labLogged = {};
+      labScored = 0;
+      await saveLab();
+      if (mounted) setState(() {});
+    }
+  }
+
   // ---------- in-app paper trading ----------
   Future<void> loadPaper() async {
     try {
       final p = await SharedPreferences.getInstance();
-      final raw = p.getString('app_paper');
+      final raw = await readStore('paper.json') ?? p.getString('app_paper');
       if (raw != null) {
-        trades = (jsonDecode(raw) as List).map((e) => AppTrade.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+        try {
+          trades = (jsonDecode(raw) as List).map((e) => AppTrade.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+        } catch (_) {
+          await writeStore('paper_unreadable_backup.json', raw);      // never overwrite data we could not read
+          toast('Saved paper trades could not be read. A backup copy was kept and saving is paused.');
+          if (mounted) setState(() {});
+          return;
+        }
       }
       autoPaper = p.getBool('app_paper_auto') ?? false;
       paperMinScore = p.getDouble('app_paper_min') ?? 0.35;
-      paperMaxOpen = p.getInt('app_paper_max') ?? 10;
+      paperMaxOpen = p.getInt('app_paper_max') ?? 40;
+      paperCoins = p.getInt('app_paper_coins') ?? 100;
+      final tl = p.getStringList('app_paper_tfs');
+      if (tl != null && tl.isNotEmpty) paperTfs = tl.toSet();
+      paperMinQ = p.getInt('app_paper_q') ?? 3;
     } catch (_) {}
+    paperLoaded = true;
     if (mounted) setState(() {});
-    if (autoPaper && !autoScan) setAutoScan(true);
-    checkPaper();                 // catches up on candles that formed while the app was closed
+    checkPaper();
+    paperScanCycle();                 // catches up on candles that formed while the app was closed
   }
 
   Future<void> savePaper() async {
+    if (!paperLoaded) return;
     try {
       final p = await SharedPreferences.getInstance();
       if (trades.length > 5000) trades = trades.sublist(trades.length - 5000);
-      await p.setString('app_paper', jsonEncode(trades.map((t) => t.toJson()).toList()));
+      final ok = await writeStore('paper.json', jsonEncode(trades.map((t) => t.toJson()).toList()));
+      if (!ok) await p.setString('app_paper', jsonEncode(trades.map((t) => t.toJson()).toList()));
       await p.setBool('app_paper_auto', autoPaper);
       await p.setDouble('app_paper_min', paperMinScore);
       await p.setInt('app_paper_max', paperMaxOpen);
+      await p.setInt('app_paper_q', paperMinQ);
+      await p.setInt('app_paper_coins', paperCoins);
+      await p.setStringList('app_paper_tfs', paperTfs.toList());
     } catch (_) {}
   }
 
   double get paperEquity => paperStart + trades.where((t) => !t.isOpen).fold(0.0, (a, t) => a + t.pnl);
 
-  AppTrade? openPaperTrade(String coin, String tf, Analysis a, String source) {
+  AppTrade? openPaperTrade(String coin, String tf, Analysis a, String source, [Map<String, dynamic>? q]) {
     if (a.side == 0 || a.atr.isNaN || a.atr <= 0) return null;
     final plan = tradePlan(a);
     if (plan[2] < 1.2) return null;
-    if (trades.any((t) => t.isOpen && t.coin == coin)) return null;
+    if (trades.any((t) => t.isOpen && t.coin == coin && t.tf == tf)) return null;
     final id = trades.isEmpty ? 1 : trades.map((t) => t.id).reduce(math.max) + 1;
     final t = AppTrade(
       id: id, coin: coin, tf: tf, source: source, verdict: a.verdict, side: a.side, buys: a.buys, sells: a.sells,
       neutrals: a.neutrals, mood: news.isEmpty ? 0 : newsScore(coin), entry: a.last, sl: plan[0], tp: plan[1],
       score: a.score, riskCash: paperEquity * paperRisk, adx: cleanNum(a.adx),
       atrPct: a.last == 0 ? null : cleanNum(a.atr / a.last * 100), opened: DateTime.now(),
+      rvol: q?['rvol'] as double?, ext: q?['ext'] as double?, quality: (q?['q'] as int?) ?? 0,
+      htfAgree: (q?['htf'] as int?) ?? 0, btc: (q?['btc'] as int?) ?? 0,
     );
     trades.add(t);
     return t;
   }
 
-  Future<void> autoOpenFromScan(List<ScanRow> rows) async {
-    final cand = rows.where((r) => r.a.side != 0 && r.a.score.abs() >= paperMinScore).toList()
-      ..sort((a, b) => b.a.score.abs().compareTo(a.a.score.abs()));
-    var added = 0;
-    for (final r in cand) {
-      if (trades.where((t) => t.isOpen).length >= paperMaxOpen) break;
-      if (eventSoon(r.coin) != null) continue;                       // same news blackout as the Final call
-      final holdH = paperHoldHours[scanTf] ?? 48;
-      final cooldown = trades.any((t) => !t.isOpen && t.coin == r.coin && t.tf == scanTf && t.closed != null &&
-          DateTime.now().difference(t.closed!).inMinutes < holdH * 15);   // wait a quarter of the hold time after a close
-      if (cooldown) continue;
-      if (openPaperTrade(r.coin, scanTf, r.a, 'scanner') != null) added++;
+  // Cached analysis of a coin on a timeframe, closed candles only (the forming candle repaints), 3 minute cache.
+  Future<Analysis?> _closedAnalysis(String coin, String tf) async {
+    if (DateTime.now().difference(_htfCacheAt).inMinutes >= 3) {
+      _htfCache.clear();
+      _htfCacheAt = DateTime.now();
     }
-    if (added > 0) {
-      await savePaper();
+    final key = '$coin|$tf';
+    if (_htfCache.containsKey(key)) return _htfCache[key];
+    Analysis? a;
+    try {
+      final cs = await fetchCandles(coin, tf);
+      if (cs.length >= 60) a = analyze(cs.sublist(0, cs.length - 1), 2);
+    } catch (_) {}
+    _htfCache[key] = a;
+    return a;
+  }
+
+  /// Confluence gate. Hard vetoes reject the setup, then 5 quality points decide. Returns null on a data failure.
+  /// cs = candles including the forming one, ac = analysis of the closed candles only.
+  Future<Map<String, dynamic>?> qualify(String coin, String tf, List<Candle> cs, Analysis ac) async {
+    final side = ac.side;
+    final closed = cs.sublist(0, cs.length - 1);
+    String? veto;
+    // overextension and exhaustion
+    final c = closed.map((x) => x.close).toList();
+    final ema20 = emaSeries(c, 20).last;
+    final ext = ac.atr > 0 ? (c.last - ema20) * side / ac.atr : 0.0;        // + = stretched in trade direction
+    if (ext > 3) veto = 'price stretched ${ext.toStringAsFixed(1)} ATR from EMA20 (chasing)';
+    final rsi = rsiLast(c, 14);
+    if (veto == null && !rsi.isNaN && ((side == 1 && rsi > 78) || (side == -1 && rsi < 22))) veto = 'RSI exhausted (${rsi.toStringAsFixed(0)})';
+    // relative volume of the last closed candle vs the previous 20
+    double? rvol;
+    final vols = closed.map((x) => x.volume).toList();
+    if (vols.length > 22 && vols.skip(vols.length - 21).fold<double>(0, (a, b) => a + b) > 0) {
+      final avg = vols.sublist(vols.length - 21, vols.length - 1).fold<double>(0, (a, b) => a + b) / 20;
+      rvol = avg > 0 ? vols.last / avg : null;
+    }
+    if (veto == null && rvol != null && rvol < 0.5) veto = 'dead volume (${rvol.toStringAsFixed(2)}x average)';
+    // higher timeframes
+    final idx = mtfList.indexOf(tf);
+    int htfSide(Analysis? a) => a?.side ?? 0;
+    final h1 = idx >= 0 && idx + 1 < mtfList.length ? await _closedAnalysis(coin, mtfList[idx + 1]) : null;
+    final h2 = idx >= 0 && idx + 2 < mtfList.length ? await _closedAnalysis(coin, mtfList[idx + 2]) : null;
+    if (veto == null && htfSide(h1) == -side) veto = '${mtfList[idx + 1]} trend is against it';
+    // market regime: altcoins should not fight Bitcoin
+    var btc = 0;
+    if (!yahooPairs.containsKey(coin) && coin != 'BTC') {
+      final b1 = await _closedAnalysis('BTC', '1h'), b4 = await _closedAnalysis('BTC', '4h');
+      if (htfSide(b1) == htfSide(b4)) btc = htfSide(b1);
+      if (veto == null && btc == -side) veto = 'Bitcoin trend is against it';
+    }
+    // crowding and news
+    var crowdOk = true;
+    if (!yahooPairs.containsKey(coin)) {
+      try {
+        final fr = (await fetchFutMeta(coin))['funding'];
+        if (fr != null && ((side == 1 && fr > 0.05) || (side == -1 && fr < -0.05))) crowdOk = false;
+      } catch (_) {}
+    }
+    final ns = news.isEmpty ? 0 : newsScore(coin);
+    if (ns * side <= -2) crowdOk = false;
+    var q = 0, htf = 0;
+    if (h1 == null || htfSide(h1) == side) { q++; if (h1 != null) htf++; }
+    if (h2 == null || htfSide(h2) == side) { q++; if (h2 != null) htf++; }
+    if (rvol == null || rvol >= 1.2) q++;
+    if (!ac.adx.isNaN && ac.adx >= 20) q++;
+    if (crowdOk) q++;
+    final why = veto ?? (q < paperMinQ ? 'quality $q of 5, needs $paperMinQ' : null);
+    return {'ok': why == null, 'why': why, 'q': q, 'htf': htf, 'rvol': rvol, 'ext': ext, 'btc': btc};
+  }
+
+  /// Runs every minute. For each chosen timeframe whose candle just closed, checks the top coins once and opens paper trades.
+  Future<void> paperScanCycle() async {
+    if (!autoPaper || paperScanBusy || !paperLoaded) return;
+    paperScanBusy = true;
+    try {
+      if (futSymbols.isEmpty) await loadFutures();
+      if (paperCoinList.length < paperCoins || DateTime.now().difference(paperCoinsAt).inMinutes >= 30) {
+        final t = await fetchTickers();
+        movers = t;
+        paperCoinList = t.map((m) => '${m['coin']}').toList();
+        paperCoinsAt = DateTime.now();
+      }
+      final coins = paperCoinList.take(paperCoins).toList();
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final jobs = <List<String>>[];
+      for (final tf in mtfList) {
+        if (!paperTfs.contains(tf)) continue;
+        final bar = barMs(tf);
+        final t0 = (nowMs ~/ bar) * bar;                 // when the newest candle closed
+        if (nowMs - t0 > bar * 0.6) continue;            // too late, the entry would be stale
+        for (final c in coins) {
+          if (paperLogged['$c|$tf'] != t0) jobs.add([c, tf, '$t0']);
+        }
+      }
+      if (jobs.isEmpty) return;
+      if (mounted) setState(() => paperStatus = 'Checking ${jobs.length} coin/timeframe pairs...');
+      final cands = <Map<String, dynamic>>[];
+      for (var i = 0; i < jobs.length; i += 8) {
+        final res = await Future.wait(jobs.skip(i).take(8).map<Future<Map<String, dynamic>?>>((j) async {
+          try {
+            final cs = await fetchCandles(j[0], j[1]);
+            if (cs.length < 61) return null;
+            final t0 = int.parse(j[2]);
+            if (cs[cs.length - 2].time.millisecondsSinceEpoch + barMs(j[1]) != t0) return null;   // exchange has not published it yet, retry next minute
+            paperLogged['${j[0]}|${j[1]}'] = t0;
+            final ac = analyze(cs.sublist(0, cs.length - 1), 2);
+            if (ac.side == 0 || ac.score.abs() < paperMinScore) return null;
+            return {'coin': j[0], 'tf': j[1], 'cs': cs, 'ac': ac};
+          } catch (_) {
+            return null;
+          }
+        }));
+        cands.addAll(res.whereType<Map<String, dynamic>>());
+        await Future.delayed(const Duration(milliseconds: 250));      // stay well inside the exchange rate limit
+      }
+      cands.sort((a, b) => (b['ac'] as Analysis).score.abs().compareTo((a['ac'] as Analysis).score.abs()));
+      var opened = 0, rejected = 0, qchecked = 0;
+      for (final m in cands) {
+        if (trades.where((t) => t.isOpen).length >= paperMaxOpen) break;
+        final coin = m['coin'] as String, tf = m['tf'] as String;
+        final ac = m['ac'] as Analysis;
+        final cs = m['cs'] as List<Candle>;
+        if (trades.any((t) => t.isOpen && t.coin == coin && t.tf == tf)) continue;
+        if (eventSoon(coin) != null) continue;                         // same news blackout as the Final call
+        final holdH = paperHoldHours[tf] ?? 48;
+        final cooldown = trades.any((t) => !t.isOpen && t.coin == coin && t.tf == tf && t.closed != null &&
+            DateTime.now().difference(t.closed!).inMinutes < holdH * 15);   // wait a quarter of the hold time after a close
+        if (cooldown) continue;
+        final live = analyze(cs, 2);                                   // entry price and plan come from the live candle
+        if (live.side != ac.side) continue;
+        Map<String, dynamic>? q;
+        if (paperMinQ > 0) {
+          if (++qchecked > 40) break;                                  // keep each cycle fast
+          q = await qualify(coin, tf, cs, ac);
+          if (q == null) continue;
+          if (q['ok'] != true) {
+            rejected++;
+            paperRejected++;
+            continue;
+          }
+        }
+        if (openPaperTrade(coin, tf, live, 'auto', q) != null) opened++;
+      }
+      if (opened > 0) await savePaper();
+      paperStatus = 'Last check ${hhmm(DateTime.now())}: ${jobs.length} pairs, ${cands.length} signals, $opened opened, $rejected filtered out.';
+    } catch (e) {
+      paperStatus = 'Auto paper trading could not run: $e';
+    } finally {
+      paperScanBusy = false;
       if (mounted) setState(() {});
     }
   }
@@ -1404,19 +1891,19 @@ class _HomeState extends State<Home> {
         byCoin.putIfAbsent(t.coin, () => []).add(t);
       }
       var closedNow = 0;
-      for (final e in byCoin.entries) {
-        final oldest = e.value.map((t) => t.opened).reduce((a, b) => a.isBefore(b) ? a : b);
-        final age = DateTime.now().difference(oldest);
-        final tf = age.inHours < 20 ? '5m' : age.inDays < 10 ? '1h' : '4h';   // finest candles that still reach back to the entry
-        List<Candle> cs;
-        try {
-          cs = await fetchCandles(e.key, tf);
-        } catch (_) {
-          continue;
-        }
-        for (final t in e.value) {
-          if (settleTrade(t, cs)) closedNow++;
-        }
+      final entries = byCoin.entries.toList();
+      for (var i = 0; i < entries.length; i += 8) {
+        await Future.wait(entries.skip(i).take(8).map((e) async {
+          final oldest = e.value.map((t) => t.opened).reduce((a, b) => a.isBefore(b) ? a : b);
+          final age = DateTime.now().difference(oldest);
+          final tf = age.inHours < 20 ? '5m' : age.inDays < 10 ? '1h' : '4h';   // finest candles that still reach back to the entry
+          try {
+            final cs = await fetchCandles(e.key, tf);
+            for (final t in e.value) {
+              if (settleTrade(t, cs)) closedNow++;
+            }
+          } catch (_) {}
+        }));
       }
       await savePaper();
       if (closedNow > 0) toast('$closedNow paper trade${closedNow == 1 ? '' : 's'} closed. See the Paper tab.');
@@ -1429,8 +1916,7 @@ class _HomeState extends State<Home> {
   Future<void> setAutoPaper(bool v) async {
     setState(() => autoPaper = v);
     await savePaper();
-    if (v && !autoScan) setAutoScan(true);
-    if (v && scanRows.isNotEmpty) await autoOpenFromScan(scanRows);
+    if (v) paperScanCycle();
   }
 
   Future<File?> _writeTemp(String name, String text) async {
@@ -1473,9 +1959,15 @@ class _HomeState extends State<Home> {
       final f = await _writeTemp('bot_paper_log.csv', bot);
       if (f != null) files.add(XFile(f.path, mimeType: 'text/csv'));
     }
+    if (labAgg.isNotEmpty) {
+      final a = await _writeTemp('lab_indicator_accuracy.csv', labAggCsv(labAgg));
+      if (a != null) files.add(XFile(a.path, mimeType: 'text/csv'));
+      final b = await _writeTemp('lab_signal_snapshots.csv', labRowsCsv(labRows));
+      if (b != null) files.add(XFile(b.path, mimeType: 'text/csv'));
+    }
     if (files.isEmpty) return toast('Nothing to share yet.');
     try {
-      await Share.shareXFiles(files, subject: 'Paper trading logs (app + bot)');
+      await Share.shareXFiles(files, subject: 'All logs (app paper trades, bot, Lab)');
     } catch (e) {
       toast('Could not share the files: $e');
     }
@@ -1512,6 +2004,7 @@ class _HomeState extends State<Home> {
       add(t.score.abs() >= .5 ? 'strong signals (score 0.5+)' : t.score.abs() >= .35 ? 'medium signals (0.35-0.5)' : 'weak signals (0.2-0.35)', t);
       add(t.adx == null ? 'ADX unknown' : t.adx! >= 25 ? 'trending (ADX 25+)' : t.adx! < 20 ? 'ranging (ADX under 20)' : 'moderate trend (ADX 20-25)', t);
       add(t.mood >= 2 ? 'bullish news' : t.mood <= -2 ? 'bearish news' : 'mixed news', t);
+      add(t.quality == 0 ? 'unfiltered trades' : t.quality >= 4 ? 'quality 4-5' : 'quality 3', t);
     }
     final list = groups.entries.where((e) => e.value.length >= 5).map((e) => MapEntry(e.key, PStats(e.value))).toList()
       ..sort((a, b) => b.value.avgR.compareTo(a.value.avgR));
@@ -1552,7 +2045,6 @@ class _HomeState extends State<Home> {
       }
       scanRows = rows;
       scanUpdated = DateTime.now();
-      if (autoPaper) await autoOpenFromScan(rows);
     } catch (e) {
       scanError = '$e';
     } finally {
@@ -2457,22 +2949,43 @@ class _HomeState extends State<Home> {
               Switch(value: autoPaper, onChanged: setAutoPaper),
             ]),
             Text(autoPaper
-                ? 'ON. Every scan (${scanTf}) opens virtual trades from the Scanner verdicts. Keep the app open: the Scanner auto-scan was turned on for you.'
-                : 'OFF. Turn on to let the app open virtual trades from every Scanner result and track whether they hit target or stop.',
+                ? 'ON. When a candle closes on any chosen timeframe, the app checks the top $paperCoins coins and opens virtual trades from the signals that pass your filters. Keep the app open.'
+                : 'OFF. Turn on to let the app open virtual trades on the top $paperCoins coins across the timeframes you choose, and track whether they hit target or stop.',
                 style: const TextStyle(fontSize: 12)),
+            if (paperStatus.isNotEmpty) Text(paperStatus, style: const TextStyle(fontSize: 11)),
+            const SizedBox(height: 8),
+            const Text('Coins (by 24h volume)', style: TextStyle(fontSize: 12)),
+            Wrap(spacing: 8, children: [
+              for (final n in [20, 50, 100])
+                ChoiceChip(label: Text('Top $n'), selected: paperCoins == n, onSelected: (_) { setState(() => paperCoins = n); savePaper(); }),
+            ]),
+            const Text('Timeframes (5m scalping to 1d position)', style: TextStyle(fontSize: 12)),
+            Wrap(spacing: 8, children: [
+              for (final tf in mtfList)
+                FilterChip(label: Text(tf), selected: paperTfs.contains(tf), onSelected: (v) {
+                  setState(() { if (v) { paperTfs.add(tf); } else if (paperTfs.length > 1) { paperTfs.remove(tf); } });
+                  savePaper();
+                }),
+            ]),
             const SizedBox(height: 8),
             const Text('Minimum signal strength', style: TextStyle(fontSize: 12)),
             Wrap(spacing: 8, children: [
               for (final o in const {'Any (0.2)': 0.2, 'Medium (0.35)': 0.35, 'Strong (0.5)': 0.5}.entries)
                 ChoiceChip(label: Text(o.key), selected: paperMinScore == o.value, onSelected: (_) { setState(() => paperMinScore = o.value); savePaper(); }),
             ]),
+            const Text('Quality filter (higher timeframes, Bitcoin trend, volume, closed-candle check)', style: TextStyle(fontSize: 12)),
+            Wrap(spacing: 8, children: [
+              for (final o in const {'Off': 0, '3 of 5': 3, '4 of 5': 4}.entries)
+                ChoiceChip(label: Text(o.key), selected: paperMinQ == o.value, onSelected: (_) { setState(() => paperMinQ = o.value); savePaper(); }),
+            ]),
+            if (paperRejected > 0) Text('Filtered out $paperRejected weak setups this session.', style: const TextStyle(fontSize: 11)),
             const Text('Max open trades', style: TextStyle(fontSize: 12)),
             Wrap(spacing: 8, children: [
-              for (final n in [5, 10, 20])
+              for (final n in [20, 50, 100])
                 ChoiceChip(label: Text('$n'), selected: paperMaxOpen == n, onSelected: (_) { setState(() => paperMaxOpen = n); savePaper(); }),
             ]),
             const SizedBox(height: 6),
-            const Text('Stop and target come from the same trade plan shown in Markets. Trades need at least 1.2 reward to risk, one open trade per coin, and none open during a high-impact news window. Same-candle stop and target counts as a loss, and 0.05R is charged for fees.', style: TextStyle(fontSize: 11)),
+            const Text('Stop and target come from the same trade plan shown in Markets. Trades also need at least 1.2 reward to risk, one open trade per coin and timeframe, and none open during a high-impact news window. Same-candle stop and target counts as a loss, and 0.05R is charged for fees.', style: TextStyle(fontSize: 11)),
           ]),
         ),
       ),
@@ -2515,8 +3028,10 @@ class _HomeState extends State<Home> {
       ],
       if (st.n > 0) ...[
         group('By timeframe', by((t) => t.tf)),
+        group('By trading style', by((t) => styleOf(t.tf))),
         group('By direction', by((t) => t.side == 1 ? 'BUY' : 'SELL')),
         group('By signal strength', by((t) => t.score.abs() >= .5 ? 'Strong (0.5+)' : t.score.abs() >= .35 ? 'Medium (0.35-0.5)' : 'Weak (0.2-0.35)')),
+        group('By quality score', by((t) => t.quality == 0 ? 'Unfiltered' : 'Quality ${t.quality} of 5')),
         group('By coin', by((t) => t.coin)),
       ],
       if (closed.isNotEmpty) ...[
@@ -2543,7 +3058,7 @@ class _HomeState extends State<Home> {
               ElevatedButton.icon(onPressed: shareAppLog, icon: const Icon(Icons.download), label: const Text('In-app log (CSV)')),
               OutlinedButton.icon(onPressed: copyAppLog, icon: const Icon(Icons.copy), label: const Text('Copy')),
               OutlinedButton.icon(onPressed: shareLog, icon: const Icon(Icons.smart_toy), label: const Text('Bot log (CSV)')),
-              OutlinedButton.icon(onPressed: shareBothLogs, icon: const Icon(Icons.folder_zip), label: const Text('Both logs')),
+              OutlinedButton.icon(onPressed: shareBothLogs, icon: const Icon(Icons.folder_zip), label: const Text('All logs')),
             ]),
             const SizedBox(height: 6),
             Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: trades.isEmpty ? null : resetPaper, icon: const Icon(Icons.delete_outline), label: const Text('Reset in-app paper account'))),
@@ -2551,6 +3066,124 @@ class _HomeState extends State<Home> {
         ),
       ),
       const Padding(padding: EdgeInsets.only(top: 8), child: Text('Trades are opened and checked only while the app is running. When you reopen it, the app replays candles since entry, so stops and targets that were hit meanwhile are still recorded. Virtual money, not financial advice.', style: TextStyle(fontSize: 11))),
+    ]);
+  }
+
+  Widget labTab() {
+    const styles = ['All', 'Scalping', 'Intraday', 'Swing', 'Position'];
+    const cats = ['All', 'Overall verdict', 'Trend', 'Momentum / oscillators', 'Volume', 'Breakout / volatility', 'Support / resistance', 'Candle patterns'];
+    const minN = 30;
+    // rows for the chosen style
+    final entries = <MapEntry<String, List<double>>>[];
+    labAgg.forEach((k, a) {
+      final i = k.lastIndexOf('|');
+      if (k.substring(i + 1) != labStyle) return;
+      final name = k.substring(0, i);
+      if (labCat != 'All' && categoryOf(name) != labCat) return;
+      entries.add(MapEntry(name, a));
+    });
+    double? raceWin(List<double> a) => a[2] + a[3] > 0 ? a[2] / (a[2] + a[3]) : null;
+    double score(MapEntry<String, List<double>> e) => e.value[0] < minN ? -9 : (raceWin(e.value) ?? .5);
+    entries.sort((a, b) => score(b).compareTo(score(a)));
+    // category summary (all indicators in a category pooled)
+    final catSum = <String, List<double>>{};
+    labAgg.forEach((k, a) {
+      final i = k.lastIndexOf('|');
+      if (k.substring(i + 1) != labStyle) return;
+      final c = categoryOf(k.substring(0, i));
+      final t = catSum.putIfAbsent(c, () => [0, 0, 0, 0, 0]);
+      for (var x = 0; x < 5; x++) {
+        t[x] += a[x];
+      }
+    });
+    // style summary of the overall verdict
+    final styleSum = <String, List<double>?>{for (final st in styles.skip(1)) st: labAgg['OVERALL verdict|$st']};
+    Color wc(double? w, double n) => n < minN || w == null ? Colors.grey : w >= .55 ? Colors.green : w <= .45 ? Colors.red : Colors.orange;
+    String pct(double? w) => w == null ? '-' : '${(w * 100).toStringAsFixed(0)}%';
+    return ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(12), children: [
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const Expanded(child: Text('Signal Lab', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
+              Switch(value: labOn, onChanged: setLabOn),
+            ]),
+            const Text('Records what every indicator said on the top coins at each candle close (15m, 1h, 4h, 1d), then checks what price did over the next 6 candles. Race test: did price move 1.5 ATR your way before 1.5 ATR against you. About 50% is a coin flip, so only results well away from 50% with 30+ signals mean anything.', style: TextStyle(fontSize: 12)),
+            const SizedBox(height: 6),
+            const Text('Coins to follow', style: TextStyle(fontSize: 12)),
+            Wrap(spacing: 8, children: [
+              for (final n in [10, 20, 40])
+                ChoiceChip(label: Text('Top $n'), selected: labCoins == n, onSelected: (_) { setState(() => labCoins = n); saveLab(); }),
+              FilterChip(label: const Text('Add 5m scalping'), selected: lab5m, onSelected: (v) { setState(() => lab5m = v); saveLab(); }),
+            ]),
+            if (labStatus.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 6), child: Text(labStatus, style: const TextStyle(fontSize: 11))),
+            if (labBusy) const Padding(padding: EdgeInsets.only(top: 6), child: LinearProgressIndicator()),
+          ]),
+        ),
+      ),
+      if (labAgg.isEmpty)
+        const Padding(padding: EdgeInsets.all(24), child: Text('No scored signals yet. Turn the Lab on and keep the app open. The first results arrive about 90 minutes later (6 candles on 15m), 6 hours for 1h, a day for 4h and 6 days for 1d. Everything is saved on the phone between sessions.', textAlign: TextAlign.center))
+      else ...[
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Trading styles: overall verdict accuracy', style: TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 4),
+              for (final e in styleSum.entries)
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: e.value == null
+                      ? Text('${e.key}: collecting', style: const TextStyle(fontSize: 12))
+                      : Text('${e.key}: ${e.value![0].toInt()} signals, race win ${pct(raceWin(e.value!))}, direction right ${(100 * e.value![1] / e.value![0]).toStringAsFixed(0)}%, avg ${(e.value![4] / e.value![0]).toStringAsFixed(2)} ATR',
+                          style: TextStyle(fontSize: 12, color: wc(raceWin(e.value!), e.value![0]))),
+                ),
+              const SizedBox(height: 4),
+              const Text('Scalping = 15m (and 5m if added), Intraday = 1h, Swing = 4h, Position = 1d.', style: TextStyle(fontSize: 11)),
+            ]),
+          ),
+        ),
+        Wrap(spacing: 8, children: [for (final x in styles) ChoiceChip(label: Text(x), selected: labStyle == x, onSelected: (_) => setState(() => labStyle = x))]),
+        if (catSum.isNotEmpty) ...[
+          const Padding(padding: EdgeInsets.fromLTRB(4, 12, 4, 2), child: Text('Indicator families (pooled)', style: TextStyle(fontWeight: FontWeight.w600))),
+          for (final e in (catSum.entries.toList()..sort((a, b) => (raceWin(b.value) ?? 0).compareTo(raceWin(a.value) ?? 0))))
+            ListTile(
+              dense: true,
+              title: Text(e.key),
+              subtitle: Text('${e.value[0].toInt()} signals, direction right ${(100 * e.value[1] / e.value[0]).toStringAsFixed(0)}%'),
+              trailing: Text('race ${pct(raceWin(e.value))}', style: TextStyle(fontWeight: FontWeight.w600, color: wc(raceWin(e.value), e.value[0]))),
+            ),
+        ],
+        const Padding(padding: EdgeInsets.fromLTRB(4, 12, 4, 2), child: Text('Every indicator, best first', style: TextStyle(fontWeight: FontWeight.w600))),
+        Wrap(spacing: 6, children: [for (final x in cats) ChoiceChip(label: Text(x, style: const TextStyle(fontSize: 11)), selected: labCat == x, onSelected: (_) => setState(() => labCat = x))]),
+        if (entries.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('No data for this style yet.')),
+        for (final e in entries.take(80))
+          ListTile(
+            dense: true,
+            title: Text(e.key),
+            subtitle: Text('${e.value[0].toInt()} signals${e.value[0] < minN ? ' (need $minN+)' : ''}, direction right ${(100 * e.value[1] / e.value[0]).toStringAsFixed(0)}%, avg ${(e.value[4] / e.value[0]).toStringAsFixed(2)} ATR'),
+            trailing: Text('race ${pct(raceWin(e.value))}', style: TextStyle(fontWeight: FontWeight.w600, color: wc(raceWin(e.value), e.value[0]))),
+          ),
+      ],
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Download Lab data', style: TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            const Text('Accuracy table: one row per indicator and style. Snapshots: the raw vote of every indicator at each signal with what happened next (last 1,500). Send these to tune the bot.', style: TextStyle(fontSize: 12)),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, children: [
+              ElevatedButton.icon(onPressed: shareLabAcc, icon: const Icon(Icons.download), label: const Text('Accuracy table')),
+              OutlinedButton.icon(onPressed: shareLabRows, icon: const Icon(Icons.table_chart), label: const Text('Raw snapshots')),
+              OutlinedButton.icon(onPressed: shareBothLogs, icon: const Icon(Icons.folder_zip), label: const Text('All logs')),
+            ]),
+            Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: resetLab, icon: const Icon(Icons.delete_outline), label: const Text('Reset Lab'))),
+          ]),
+        ),
+      ),
+      const Padding(padding: EdgeInsets.only(top: 8), child: Text('Collecting only happens while the app is open. Past results never guarantee future ones, and an indicator can look good over a short window by luck. Trust it only with hundreds of signals.', style: TextStyle(fontSize: 11))),
     ]);
   }
 
@@ -2568,7 +3201,7 @@ class _HomeState extends State<Home> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 8,
+      length: 9,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Signal Bot'),
@@ -2589,6 +3222,7 @@ class _HomeState extends State<Home> {
             Tab(text: 'Alerts'),
             Tab(text: 'Account'),
             Tab(text: 'Paper'),
+            Tab(text: 'Lab'),
             Tab(text: 'Report'),
           ]),
         ),
@@ -2600,7 +3234,7 @@ class _HomeState extends State<Home> {
                 child: Text('Updated ${ago(data!['updated'])}', style: const TextStyle(fontSize: 12)),
               ),
             Expanded(
-              child: TabBarView(children: [marketTab(), scannerTab(), signalsTab(), newsTab(), alertsTab(), accountTab(), paperTab(), reportTab()]),
+              child: TabBarView(children: [marketTab(), scannerTab(), signalsTab(), newsTab(), alertsTab(), accountTab(), paperTab(), labTab(), reportTab()]),
             ),
             const Padding(
               padding: EdgeInsets.all(6),
