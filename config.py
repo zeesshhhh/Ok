@@ -22,10 +22,10 @@ NEWS_KEYWORDS = {
 MACRO_WORDS = ["fed", "fomc", "inflation", "cpi", "dollar", "powell", "rate cut", "rate hike"]
 
 # timeframes
-INTERVAL = {"5m": "5m", "15m": "15m", "1h": "1h", "1d": "1d"}
-LIVE_PERIOD = {"5m": "5d", "15m": "1mo", "1h": "60d", "1d": "2y"}
-BACKTEST_PERIOD = {"5m": "60d", "15m": "60d", "1h": "730d", "1d": "5y"}
-BAR_MIN = {"5m": 5, "15m": 15, "1h": 60, "1d": 1440}
+INTERVAL = {"5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "4h": "1h", "1d": "1d"}   # 4h is built from 1h candles
+LIVE_PERIOD = {"5m": "5d", "15m": "1mo", "30m": "1mo", "1h": "60d", "4h": "180d", "1d": "2y"}
+BACKTEST_PERIOD = {"5m": "60d", "15m": "60d", "30m": "60d", "1h": "730d", "4h": "730d", "1d": "5y"}
+BAR_MIN = {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}
 
 # risk and filters
 MIN_SCORE = 4                # swing score threshold (max 7)
@@ -35,9 +35,10 @@ NEWS_BLACKOUT_MIN = 45
 NEWS_FILTER = True
 FLOW_FILTER = True
 FOREX_SESSION = (7, 17)      # UTC hours; intraday forex strategies only fire inside this window
-# Default = only strategies with PF > 1.1 in backtest_results.txt. Re-run the backtest and edit this set.
-# Set to None to run everything (Swing, Quant, Price action, Scalping, Trend, Breakout, Mean reversion lost money).
-ENABLED_STRATEGIES = {"Position", "Intraday ORB", "Day trading", "Reversal"}
+ENABLED_STRATEGIES = None    # None = all strategies run
+# Strategies that had profit factor > 1.1 in backtest_results.txt. Everything else is tagged "experimental"
+# in Telegram and the app until paper trading or a new backtest proves it. Update this after each backtest.
+PROVEN = {"Position", "Intraday ORB", "Day trading", "Reversal"}
 
 # special strategies
 PAIRS = [("ETH-USD", "BTC-USD"), ("EURUSD=X", "GBPUSD=X"), ("GC=F", "SI=F")]

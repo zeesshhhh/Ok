@@ -1,14 +1,14 @@
 import html, json, re, sys
 import pandas as pd
 from config import *
-from data import get_ohlc
+from data import get_ohlc, resample
 from signals import build
 from indicators import add_indicators
 from strategies import REGISTRY
 import special, news, ai, telegram, flow_live, paper, fundamentals, feed
 
 STATE = "state.json"
-INTRADAY_FX = {"Scalping", "Day trading", "Intraday ORB"}
+INTRADAY_FX = {"Scalping", "Day trading", "Day trading 30m", "Trend 30m", "Breakout 30m", "Intraday ORB"}
 
 def load_sent():
     try:
@@ -21,13 +21,16 @@ def fmt(p):
 
 def load_rows(sym, tf, period):
     df = get_ohlc(sym, INTERVAL[tf], period)
+    if tf == "4h" and len(df):
+        df = resample(df, "4h")
     if len(df) < (210 if tf == "1d" else 250):
         return None
     return list((build(df) if tf == "1h" else add_indicators(df)).itertuples())
 
 def card(s):
     side = "BUY" if s["side"] == 1 else "SELL"
-    return (f"<b>{html.escape(s['strategy'])}</b> {side} ({s['tf']}, {s['style']})\n"
+    tag = "" if s.get("grade", "proven") == "proven" else " ⚠️ experimental"
+    return (f"<b>{html.escape(s['strategy'])}</b> {side} ({s['tf']}, {s['style']}){tag}\n"
             f"  {fmt(s['entry'])} | SL {fmt(s['sl'])} | TP {fmt(s['tp'])}\n  {html.escape(s['why'])}")
 
 def message(sym, sigs, sentiment, top, fnotes, micro):
@@ -72,7 +75,8 @@ def scan():
         if abs(s["tp"] - live) < 1.2 * abs(live - s["sl"]):   # reward/risk from the real entry too thin
             return
         found.setdefault(sym, []).append({**s, "strategy": name, "tf": tf, "entry": live, "key": key,
-                                          "hold_h": hold, "style": style})
+                                          "hold_h": hold, "style": style,
+                                          "grade": "proven" if name in PROVEN else "experimental"})
 
     for sym, asset in WATCHLIST.items():
         rows[sym] = {}
@@ -108,7 +112,7 @@ def scan():
         key = f"Momentum|{sym}|{wk.year}-{wk.week}|{s['side']}"
         if key not in sent:
             found.setdefault(sym, []).append({**s, "strategy": "Momentum", "tf": "1d", "entry": float(r.close), "key": key,
-                                              "hold_h": 720, "style": "weeks"})
+                                              "hold_h": 720, "style": "weeks", "grade": "experimental"})
 
     paper.update(ps, {s: r.get("15m") for s, r in rows.items()})
     for sym, sigs in found.items():

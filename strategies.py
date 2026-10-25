@@ -146,4 +146,11 @@ REGISTRY = [
     ("Price action", "1h", price_action, 120, 72, "hours to days"),
     ("Quant factor", "1h", quant, 120, 96, "hours to days"),
     ("Position", "1d", position, 3000, 1440, "weeks to months"),
+    ("Day trading 30m", "30m", day_trading, 90, 36, "hours"),
+    ("Trend 30m", "30m", trend, 90, 48, "hours to days"),
+    ("Breakout 30m", "30m", breakout, 90, 48, "hours to days"),
+    ("Trend 4H", "4h", trend, 480, 240, "days"),
+    ("Breakout 4H", "4h", breakout, 480, 240, "days"),
+    ("Reversal 4H", "4h", reversal, 480, 240, "days"),
+    ("Mean reversion 4H", "4h", mean_reversion, 480, 240, "days"),
 ]

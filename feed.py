@@ -16,7 +16,7 @@ def add(fd, sym, sigs):
         agree = sum(x["side"] == s["side"] for x in sigs)
         fd["signals"].insert(0, {"symbol": sym, "side": "BUY" if s["side"] == 1 else "SELL", "strategy": s["strategy"],
                                  "tf": s["tf"], "entry": s["entry"], "sl": s["sl"], "tp": s["tp"], "why": s["why"],
-                                 "style": s.get("style", ""), "agree": agree, "time": now})
+                                 "style": s.get("style", ""), "grade": s.get("grade", ""), "agree": agree, "time": now})
     fd["signals"] = fd["signals"][:100]
 
 def save(fd):
