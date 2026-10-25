@@ -180,7 +180,18 @@ def scan():
         telegram.send(message(sym, keep, sc, top, fnotes, special.order_book(sym) if asset == "crypto" else None, extra))
         feed.add(fd, sym, keep)
         for s in keep:
-            paper.open_pos(ps, sym, s)
+            R = rows[sym].get(s["tf"])
+            r = R[-2] if R and len(R) > 2 else None
+            num = lambda v: None if v is None or v != v else round(float(v), 3)
+            ctx = {"asset": asset, "agree": sum(x["side"] == s["side"] for x in keep), "mood": sc,
+                   "htf": htf_trend(rows[sym].get("4h")), "hour": now.hour, "weekday": now.weekday()}
+            if r is not None:
+                try:
+                    ctx.update({"adx": num(getattr(r, "adx", None)), "rsi": num(getattr(r, "rsi", None)),
+                                "atr_pct": num(r.atr / r.close * 100)})
+                except Exception:
+                    pass
+            paper.open_pos(ps, sym, {**s, "ctx": ctx})
 
     for a, b in PAIRS:
         try:
