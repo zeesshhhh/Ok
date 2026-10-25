@@ -2,10 +2,22 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 const feedUrl = String.fromEnvironment('FEED_URL');
 
-void main() => runApp(const SignalApp());
+final FlutterLocalNotificationsPlugin notifications = FlutterLocalNotificationsPlugin();
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+  const initSettings = InitializationSettings(android: androidInit);
+  await notifications.initialize(initSettings);
+  await notifications
+      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+      ?.requestNotificationsPermission();
+  runApp(const SignalApp());
+}
 
 double num0(dynamic v) => (v as num?)?.toDouble() ?? 0;
 
@@ -56,12 +68,35 @@ class _HomeState extends State<Home> {
   bool loading = false;
   String filter = 'All';
   Timer? timer;
+  Set<String>? knownSignalIds;
+
+  String signalId(Map<String, dynamic> s) =>
+      '${s['symbol']}|${s['side']}|${s['strategy']}|${s['time']}';
+
+  Future<void> notifyNewSignal(Map<String, dynamic> s) async {
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'new_signals',
+        'New trading signals',
+        channelDescription: 'Alerts when the Signal Bot feed receives a new signal',
+        importance: Importance.high,
+        priority: Priority.high,
+      ),
+    );
+    final side = '${s['side'] ?? 'SIGNAL'}';
+    await notifications.show(
+      signalId(s).hashCode & 0x7fffffff,
+      '$side ${s['symbol'] ?? ''}',
+      '${s['strategy'] ?? 'New signal'} · Entry ${s['entry'] ?? '-'} · SL ${s['sl'] ?? '-'} · TP ${s['tp'] ?? '-'}',
+      details,
+    );
+  }
 
   @override
   void initState() {
     super.initState();
     load();
-    timer = Timer.periodic(const Duration(minutes: 2), (_) => load());
+    timer = Timer.periodic(const Duration(minutes: 1), (_) => load());
   }
 
   @override
@@ -83,7 +118,22 @@ class _HomeState extends State<Home> {
       if (r.statusCode != 200) {
         throw 'Feed not found (HTTP ${r.statusCode}). Run the bot once and make sure the repo is public.';
       }
-      data = jsonDecode(r.body) as Map<String, dynamic>;
+      final newData = jsonDecode(r.body) as Map<String, dynamic>;
+      final newSignals = (newData['signals'] as List? ?? [])
+          .whereType<Map>()
+          .map((s) => Map<String, dynamic>.from(s))
+          .toList();
+      final currentIds = newSignals.map(signalId).toSet();
+      final previousIds = knownSignalIds;
+      if (previousIds != null) {
+        for (final signal in newSignals.reversed) {
+          if (!previousIds.contains(signalId(signal))) {
+            await notifyNewSignal(signal);
+          }
+        }
+      }
+      knownSignalIds = currentIds;
+      data = newData;
       error = null;
     } catch (e) {
       error = '$e';
