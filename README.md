@@ -60,6 +60,8 @@ The bot publishes `docs/feed.json` after each run. The app reads it, so the repo
 - Switch on Auto paper trading. Choose the coins (top 20, 50 or 100 by 24h volume) and the timeframes (5m, 15m, 30m, 1h, 4h, 1d). When a candle closes on a chosen timeframe, the app checks each coin once on that candle and opens virtual trades from signals that meet your minimum strength and quality filter. Signals more than 60% of a candle old are skipped so entries are never stale.
 - Rules: 1.2+ reward to risk, one open trade per coin and timeframe, none during a high-impact news window, cooldown after a close. 1% risk per trade, 0.05R fees, same-candle stop and target counts as a loss.
 - Quality filter (Paper tab, default 3 of 5). Before a scanner trade opens, the app re-checks it: the verdict must hold on the closed candle (the forming candle repaints), price must not be stretched over 3 ATR from EMA20 or RSI exhausted, volume must not be dead, and the next higher timeframe must not oppose it. Altcoins also must not fight the Bitcoin 1h and 4h trend. Five points are then scored: next timeframe agrees, the one above agrees, volume 1.2x average or more, ADX 20+, and funding and news not crowded against it. Choose Off, 3 of 5 or 4 of 5. Quality is logged per trade, so the Paper tab and CSV show whether the filter actually improves results.
+- Direction cap: no more than 60% of the open-trade limit may point the same way, since many coins move together.
+- Stop rule: Fixed stop, Break-even (stop moves to entry after +1R, from the next candle), or A/B test (alternate trades), so the Paper tab shows which rule performs better.
 - Markets tab has a Paper trade this button for a manual entry.
 - Stops, targets and timeouts are checked every 60 seconds while the app is open. On reopening, the app replays candles since entry, so hits made while it was closed are still recorded.
 - Accuracy: win rate, average R, profit factor, hit target vs stop vs timeout, breakdown by timeframe, direction, signal strength and coin, plus a short list of the best and worst groups.
@@ -72,6 +74,7 @@ Builds are now signed with a fixed key (app_src/debug.keystore) and a rising ver
 - Switch it on and keep the app open. At every candle close (15m, 1h, 4h, 1d, optional 5m) for the top 10, 20 or 40 coins, it records the vote of every indicator (trend, momentum, volume, breakout, support/resistance, candle patterns, overall verdict).
 - 6 candles later it scores each vote: direction right or wrong, how far price moved in ATR, and a race test (+1.5 ATR before -1.5 ATR).
 - The tab compares trading styles (Scalping 15m, Intraday 1h, Swing 4h, Position 1d), indicator families and each single indicator, best first. Anything under 30 signals is greyed out.
+- Every score is compared with what a random mix of buys and sells would have scored in the same market ("expected"), so a falling day cannot make bearish indicators look good. Rankings stay grey until there are 30+ distinct candle closes, because coins that signal at the same close move together.
 - Download the accuracy table, the raw snapshots, or All logs (also includes paper trades and the bot log).
 
 - Trades live on the phone only. Clearing app data or Reset deletes them, so download first.
