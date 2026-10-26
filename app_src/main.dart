@@ -1018,6 +1018,7 @@ class AppTrade {
   final double entry, sl, tp, score, riskCash;
   final double? adx, atrPct, rvol, ext;
   final int quality, htfAgree, btc;
+  final bool be;                  // move the stop to entry after the trade gains 1R
   final DateTime opened;
   String status = 'open', reason = '';
   double mfe = 0, mae = 0, exitPx = 0, r = 0;
@@ -1028,7 +1029,7 @@ class AppTrade {
       required this.side, required this.buys, required this.sells, required this.neutrals, required this.mood,
       required this.entry, required this.sl, required this.tp, required this.score, required this.riskCash,
       required this.adx, required this.atrPct, required this.opened,
-      this.rvol, this.ext, this.quality = 0, this.htfAgree = 0, this.btc = 0});
+      this.rvol, this.ext, this.quality = 0, this.htfAgree = 0, this.btc = 0, this.be = false});
 
   bool get isOpen => status == 'open';
   double get riskPx => (entry - sl).abs();
@@ -1041,7 +1042,7 @@ class AppTrade {
         'risk': riskCash, 'adx': cleanNum(adx), 'atrPct': cleanNum(atrPct), 'opened': opened.toIso8601String(),
         'status': status, 'reason': reason, 'mfe': mfe, 'mae': mae, 'exit': exitPx, 'r': r, 'amb': ambiguous,
         'closed': closed?.toIso8601String(),
-        'rvol': cleanNum(rvol), 'ext': cleanNum(ext), 'q': quality, 'htf': htfAgree, 'btc': btc,
+        'rvol': cleanNum(rvol), 'ext': cleanNum(ext), 'q': quality, 'htf': htfAgree, 'btc': btc, 'be': be,
       };
 
   factory AppTrade.fromJson(Map<String, dynamic> j) {
@@ -1053,7 +1054,7 @@ class AppTrade {
       score: num0(j['score']), riskCash: num0(j['risk']), adx: (j['adx'] as num?)?.toDouble(),
       atrPct: (j['atrPct'] as num?)?.toDouble(), opened: DateTime.tryParse('${j['opened']}') ?? DateTime.now(),
       rvol: (j['rvol'] as num?)?.toDouble(), ext: (j['ext'] as num?)?.toDouble(), quality: (j['q'] as num?)?.toInt() ?? 0,
-      htfAgree: (j['htf'] as num?)?.toInt() ?? 0, btc: (j['btc'] as num?)?.toInt() ?? 0,
+      htfAgree: (j['htf'] as num?)?.toInt() ?? 0, btc: (j['btc'] as num?)?.toInt() ?? 0, be: j['be'] == true,
     );
     t.status = '${j['status'] ?? 'open'}';
     t.reason = '${j['reason'] ?? ''}';
@@ -1067,10 +1068,12 @@ class AppTrade {
   }
 }
 
-/// Walks candles after the entry candle. Same-candle SL and TP counts as SL (pessimistic). Returns true if closed.
+/// Walks candles after the entry candle. Same-candle SL and TP counts as SL (pessimistic).
+/// With break-even on, the stop moves to entry from the candle AFTER price first gains 1R. Returns true if closed.
 bool settleTrade(AppTrade t, List<Candle> cs) {
   final risk = t.riskPx == 0 ? 1e-12 : t.riskPx;
   var mfe = t.mfe, mae = t.mae;
+  var stop = t.sl, armed = false;
   double? exitPx;
   var reason = '', amb = false;
   DateTime? when;
@@ -1080,15 +1083,19 @@ bool settleTrade(AppTrade t, List<Candle> cs) {
     final adv = t.side == 1 ? t.entry - c.low : c.high - t.entry;
     mfe = math.max(mfe, fav / risk);
     mae = math.max(mae, adv / risk);
-    final hitSl = t.side == 1 ? c.low <= t.sl : c.high >= t.sl;
+    final hitSl = t.side == 1 ? c.low <= stop : c.high >= stop;
     final hitTp = t.side == 1 ? c.high >= t.tp : c.low <= t.tp;
     if (hitSl) {
-      exitPx = t.sl; reason = 'SL'; when = c.time; amb = hitTp;
+      exitPx = stop; reason = armed ? 'BE' : 'SL'; when = c.time; amb = hitTp;
       break;
     }
     if (hitTp) {
       exitPx = t.tp; reason = 'TP'; when = c.time;
       break;
+    }
+    if (t.be && !armed && fav / risk >= 1) {
+      armed = true;
+      stop = t.entry;
     }
   }
   t.mfe = mfe;
@@ -1108,7 +1115,7 @@ bool settleTrade(AppTrade t, List<Candle> cs) {
 }
 
 class PStats {
-  int n = 0, wins = 0, tp = 0, sl = 0, timeouts = 0;
+  int n = 0, wins = 0, tp = 0, sl = 0, timeouts = 0, be = 0;
   double sumR = 0, grossWin = 0, grossLoss = 0;
   PStats(Iterable<AppTrade> list) {
     for (final t in list.where((x) => !x.isOpen)) {
@@ -1118,6 +1125,7 @@ class PStats {
       if (t.reason == 'TP') tp++;
       if (t.reason == 'SL') sl++;
       if (t.reason == 'TIMEOUT') timeouts++;
+      if (t.reason == 'BE') be++;
     }
   }
   double get winPct => n == 0 ? 0 : 100.0 * wins / n;
@@ -1135,7 +1143,7 @@ String tradesToCsv(List<AppTrade> trades) {
   const cols = ['id', 'status', 'opened_utc', 'closed_utc', 'hours_held', 'symbol', 'strategy', 'tf', 'side', 'verdict', 'score',
     'entry', 'sl', 'tp', 'risk_pct', 'planned_rr', 'exit_price', 'exit_reason', 'same_candle_sl_tp', 'r_multiple', 'pnl_usd',
     'mfe_r', 'mae_r', 'buys', 'neutrals', 'sells', 'adx', 'atr_pct', 'news_mood', 'hour_utc', 'weekday',
-    'quality', 'htf_agree', 'rvol', 'ext_atr', 'btc_regime'];
+    'quality', 'htf_agree', 'rvol', 'ext_atr', 'btc_regime', 'be_stop'];
   String r(double? v, int n) => v == null ? '' : v.toStringAsFixed(n);
   final out = StringBuffer(cols.join(',')).toString();
   final lines = <String>[out];
@@ -1149,7 +1157,7 @@ String tradesToCsv(List<AppTrade> trades) {
       t.entry, t.sl, t.tp, r(t.entry == 0 ? null : t.riskPx / t.entry * 100, 3), r(t.plannedRr, 2),
       done ? t.exitPx : '', done ? t.reason : '', done ? t.ambiguous : '', done ? r(t.r, 3) : '', done ? r(t.pnl, 2) : '',
       r(t.mfe, 2), r(t.mae, 2), t.buys, t.neutrals, t.sells, r(t.adx, 1), r(t.atrPct, 3), t.mood, u.hour, u.weekday,
-      t.quality, t.htfAgree, r(t.rvol, 2), r(t.ext, 2), t.btc,
+      t.quality, t.htfAgree, r(t.rvol, 2), r(t.ext, 2), t.btc, t.be,
     ];
     lines.add(row.map(csvCell).join(','));
   }
@@ -1244,12 +1252,20 @@ int evalSnap(LabSnap s, List<Candle> cs) {
   return 1;
 }
 
-/// aggregate row: [n, directionHits, raceWins, raceLosses, sumSignedMoveAtr]
+/// aggregate row: [n, directionHits, raceWins, raceLosses, sumSignedMoveAtr, decidedBuys, decidedSells, buyVotes]
+/// the '__BASE__|style' row holds the market itself: [snapshots, upFirst, downFirst, movedUp, 0, 0, 0, 0]
 void labAdd(Map<String, List<double>> agg, LabSnap s) {
   final style = styleOf(s.tf);
+  for (final key in ['__BASE__|$style', '__BASE__|All']) {
+    final b = agg.putIfAbsent(key, () => List<double>.filled(8, 0));
+    b[0]++;
+    if (s.race == 1) b[1]++;
+    if (s.race == -1) b[2]++;
+    if (s.move > 0) b[3]++;
+  }
   s.votes.forEach((name, sig) {
     for (final key in ['$name|$style', '$name|All']) {
-      final a = agg.putIfAbsent(key, () => [0, 0, 0, 0, 0]);
+      final a = agg.putIfAbsent(key, () => List<double>.filled(8, 0));
       a[0]++;
       if (s.move * sig > 0) a[1]++;
       if (s.race == sig) {
@@ -1258,19 +1274,53 @@ void labAdd(Map<String, List<double>> agg, LabSnap s) {
         a[3]++;
       }
       a[4] += s.move * sig;
+      if (s.race != 0) {
+        if (sig == 1) { a[5]++; } else { a[6]++; }
+      }
+      if (sig == 1) a[7]++;
     }
   });
 }
 
+class LabM {
+  final double winPct, basePct, excessPts, z, dirPct, dirBasePct;
+  LabM(this.winPct, this.basePct, this.excessPts, this.z, this.dirPct, this.dirBasePct);
+}
+
+/// Compares an indicator with a random mix of buys and sells that faced the same market.
+/// A trend-following indicator "wins" on a falling day just by being bearish, so only the excess over this baseline counts.
+LabM? labM(List<double> a, List<double>? b) {
+  if (b == null || a.length < 8 || b.length < 8) return null;
+  final dec = b[1] + b[2];
+  if (dec == 0 || a[0] == 0) return null;
+  final pUp = b[1] / dec;
+  final decided = a[5] + a[6];
+  if (decided == 0) return null;
+  final exp = a[5] * pUp + a[6] * (1 - pUp);
+  final varr = decided * pUp * (1 - pUp);
+  final pMoveUp = b[3] / b[0];
+  final dirExp = a[7] * pMoveUp + (a[0] - a[7]) * (1 - pMoveUp);
+  return LabM(100 * a[2] / decided, 100 * exp / decided, 100 * (a[2] - exp) / decided, varr > 0 ? (a[2] - exp) / math.sqrt(varr) : 0,
+      100 * a[1] / a[0], 100 * dirExp / a[0]);
+}
+
 String labAggCsv(Map<String, List<double>> agg) {
-  final lines = ['indicator,category,style,signals,direction_accuracy_pct,race_wins,race_losses,race_win_pct,avg_move_atr'];
-  final keys = agg.keys.toList()..sort();
+  final lines = ['indicator,category,style,signals,direction_accuracy_pct,direction_expected_pct,race_wins,race_losses,race_win_pct,race_expected_pct,excess_pts,z_if_independent,avg_move_atr'];
+  final keys = agg.keys.where((k) => !k.startsWith('__BASE__')).toList()..sort();
   for (final k in keys) {
     final a = agg[k]!, i = k.lastIndexOf('|');
     final name = k.substring(0, i), style = k.substring(i + 1);
     final den = a[2] + a[3];
-    lines.add([csvCell(name), csvCell(categoryOf(name)), style, a[0].toInt(), (100 * a[1] / a[0]).toStringAsFixed(1), a[2].toInt(), a[3].toInt(),
-      den > 0 ? (100 * a[2] / den).toStringAsFixed(1) : '', (a[4] / a[0]).toStringAsFixed(3)].join(','));
+    final m = labM(a, agg['__BASE__|$style']);
+    lines.add([csvCell(name), csvCell(categoryOf(name)), style, a[0].toInt(), (100 * a[1] / a[0]).toStringAsFixed(1),
+      m == null ? '' : m.dirBasePct.toStringAsFixed(1), a[2].toInt(), a[3].toInt(), den > 0 ? (100 * a[2] / den).toStringAsFixed(1) : '',
+      m == null ? '' : m.basePct.toStringAsFixed(1), m == null ? '' : m.excessPts.toStringAsFixed(1), m == null ? '' : m.z.toStringAsFixed(2),
+      (a[4] / a[0]).toStringAsFixed(3)].join(','));
+  }
+  final marks = agg.keys.where((k) => k.startsWith('__BASE__')).toList()..sort();
+  for (final k in marks) {
+    final b = agg[k]!;
+    lines.add('MARKET (all coins),Market,${k.substring(k.lastIndexOf('|') + 1)},${b[0].toInt()},${(100 * b[3] / b[0]).toStringAsFixed(1)} up,,${b[1].toInt()} up first,${b[2].toInt()} down first,,,,,');
   }
   return lines.join('\n') + '\n';
 }
@@ -1357,7 +1407,7 @@ class _HomeState extends State<Home> {
   List<AppTrade> trades = [];
   bool autoPaper = false, paperBusy = false;
   double paperMinScore = 0.35;
-  int paperMaxOpen = 40, paperMinQ = 3, paperRejected = 0, paperCoins = 100;
+  int paperMaxOpen = 40, paperMinQ = 3, paperRejected = 0, paperCoins = 100, paperBe = 2;   // paperBe: 0 off, 1 on, 2 alternate (A/B test)
   Set<String> paperTfs = {'5m', '15m', '30m', '1h', '4h', '1d'};
   bool paperScanBusy = false;
   final Map<String, int> paperLogged = {};     // coin|tf -> candle close already handled
@@ -1505,6 +1555,12 @@ class _HomeState extends State<Home> {
         labPending = (j['pending'] as List).map((e) => LabSnap.fromJson(Map<String, dynamic>.from(e as Map))).toList();
         labRows = (j['rows'] as List).map((e) => LabSnap.fromJson(Map<String, dynamic>.from(e as Map))).toList();
         labLogged = {for (final e in (j['logged'] as Map).entries) '${e.key}': (e.value as num).toInt()};
+        if (labAgg.values.any((a) => a.length < 8)) {       // older save: rebuild with the market baseline from the raw rows
+          labAgg = {};
+          for (final r in labRows) {
+            labAdd(labAgg, r);
+          }
+        }
       }
       labLoaded = true;
     } catch (_) {
@@ -1680,6 +1736,7 @@ class _HomeState extends State<Home> {
       paperMinScore = p.getDouble('app_paper_min') ?? 0.35;
       paperMaxOpen = p.getInt('app_paper_max') ?? 40;
       paperCoins = p.getInt('app_paper_coins') ?? 100;
+      paperBe = p.getInt('app_paper_be') ?? 2;
       final tl = p.getStringList('app_paper_tfs');
       if (tl != null && tl.isNotEmpty) paperTfs = tl.toSet();
       paperMinQ = p.getInt('app_paper_q') ?? 3;
@@ -1702,6 +1759,7 @@ class _HomeState extends State<Home> {
       await p.setInt('app_paper_max', paperMaxOpen);
       await p.setInt('app_paper_q', paperMinQ);
       await p.setInt('app_paper_coins', paperCoins);
+      await p.setInt('app_paper_be', paperBe);
       await p.setStringList('app_paper_tfs', paperTfs.toList());
     } catch (_) {}
   }
@@ -1721,6 +1779,7 @@ class _HomeState extends State<Home> {
       atrPct: a.last == 0 ? null : cleanNum(a.atr / a.last * 100), opened: DateTime.now(),
       rvol: q?['rvol'] as double?, ext: q?['ext'] as double?, quality: (q?['q'] as int?) ?? 0,
       htfAgree: (q?['htf'] as int?) ?? 0, btc: (q?['btc'] as int?) ?? 0,
+      be: paperBe == 1 || (paperBe == 2 && id.isEven),
     );
     trades.add(t);
     return t;
@@ -1843,7 +1902,7 @@ class _HomeState extends State<Home> {
         await Future.delayed(const Duration(milliseconds: 250));      // stay well inside the exchange rate limit
       }
       cands.sort((a, b) => (b['ac'] as Analysis).score.abs().compareTo((a['ac'] as Analysis).score.abs()));
-      var opened = 0, rejected = 0, qchecked = 0;
+      var opened = 0, rejected = 0, qchecked = 0, crowded = 0;
       for (final m in cands) {
         if (trades.where((t) => t.isOpen).length >= paperMaxOpen) break;
         final coin = m['coin'] as String, tf = m['tf'] as String;
@@ -1855,6 +1914,11 @@ class _HomeState extends State<Home> {
         final cooldown = trades.any((t) => !t.isOpen && t.coin == coin && t.tf == tf && t.closed != null &&
             DateTime.now().difference(t.closed!).inMinutes < holdH * 15);   // wait a quarter of the hold time after a close
         if (cooldown) continue;
+        // many coins move together, so 40 same-direction trades are really one bet: cap each direction at 60% of the limit
+        if (trades.where((t) => t.isOpen && t.side == ac.side).length >= (paperMaxOpen * 0.6).ceil()) {
+          crowded++;
+          continue;
+        }
         final live = analyze(cs, 2);                                   // entry price and plan come from the live candle
         if (live.side != ac.side) continue;
         Map<String, dynamic>? q;
@@ -1871,7 +1935,7 @@ class _HomeState extends State<Home> {
         if (openPaperTrade(coin, tf, live, 'auto', q) != null) opened++;
       }
       if (opened > 0) await savePaper();
-      paperStatus = 'Last check ${hhmm(DateTime.now())}: ${jobs.length} pairs, ${cands.length} signals, $opened opened, $rejected filtered out.';
+      paperStatus = 'Last check ${hhmm(DateTime.now())}: ${jobs.length} pairs, ${cands.length} signals, $opened opened, $rejected filtered out, $crowded skipped (too many already one way).';
     } catch (e) {
       paperStatus = 'Auto paper trading could not run: $e';
     } finally {
@@ -2984,6 +3048,11 @@ class _HomeState extends State<Home> {
               for (final n in [20, 50, 100])
                 ChoiceChip(label: Text('$n'), selected: paperMaxOpen == n, onSelected: (_) { setState(() => paperMaxOpen = n); savePaper(); }),
             ]),
+            const Text('Stop rule (break-even moves the stop to entry after +1R)', style: TextStyle(fontSize: 12)),
+            Wrap(spacing: 8, children: [
+              for (final o in const {'Fixed stop': 0, 'Break-even': 1, 'A/B test': 2}.entries)
+                ChoiceChip(label: Text(o.key), selected: paperBe == o.value, onSelected: (_) { setState(() => paperBe = o.value); savePaper(); }),
+            ]),
             const SizedBox(height: 6),
             const Text('Stop and target come from the same trade plan shown in Markets. Trades also need at least 1.2 reward to risk, one open trade per coin and timeframe, and none open during a high-impact news window. Same-candle stop and target counts as a loss, and 0.05R is charged for fees.', style: TextStyle(fontSize: 11)),
           ]),
@@ -3000,7 +3069,7 @@ class _HomeState extends State<Home> {
               const SizedBox(height: 6),
               Text('Accuracy: ${st.winPct.toStringAsFixed(0)}% win rate (${st.wins} of ${st.n})'),
               Text('Average ${sgn(st.avgR)}R per trade, profit factor ${st.pf.toStringAsFixed(2)}, total ${sgn(st.sumR, 1)}R'),
-              Text('Hit target ${st.tp}, hit stop ${st.sl}, timed out ${st.timeouts}', style: const TextStyle(fontSize: 12)),
+              Text('Hit target ${st.tp}, hit stop ${st.sl}, break-even ${st.be}, timed out ${st.timeouts}', style: const TextStyle(fontSize: 12)),
             ],
           ]),
         ),
@@ -3029,6 +3098,7 @@ class _HomeState extends State<Home> {
       if (st.n > 0) ...[
         group('By timeframe', by((t) => t.tf)),
         group('By trading style', by((t) => styleOf(t.tf))),
+        group('By stop rule', by((t) => t.be ? 'Break-even after 1R' : 'Fixed stop')),
         group('By direction', by((t) => t.side == 1 ? 'BUY' : 'SELL')),
         group('By signal strength', by((t) => t.score.abs() >= .5 ? 'Strong (0.5+)' : t.score.abs() >= .35 ? 'Medium (0.35-0.5)' : 'Weak (0.2-0.35)')),
         group('By quality score', by((t) => t.quality == 0 ? 'Unfiltered' : 'Quality ${t.quality} of 5')),
@@ -3072,34 +3142,39 @@ class _HomeState extends State<Home> {
   Widget labTab() {
     const styles = ['All', 'Scalping', 'Intraday', 'Swing', 'Position'];
     const cats = ['All', 'Overall verdict', 'Trend', 'Momentum / oscillators', 'Volume', 'Breakout / volatility', 'Support / resistance', 'Candle patterns'];
-    const minN = 30;
-    // rows for the chosen style
+    const minN = 30, minMoments = 30;
+    // signals logged at the same candle close move together, so count distinct closes as the real sample size
+    final moments = <String, Set<int>>{};
+    for (final r in labRows) {
+      final t = r.t0.millisecondsSinceEpoch;
+      moments.putIfAbsent('All', () => {}).add(t);
+      moments.putIfAbsent(styleOf(r.tf), () => {}).add(t);
+    }
+    final nMoments = moments[labStyle]?.length ?? 0;
+    final reliable = nMoments >= minMoments;
+    final base = labAgg['__BASE__|$labStyle'];
     final entries = <MapEntry<String, List<double>>>[];
     labAgg.forEach((k, a) {
       final i = k.lastIndexOf('|');
-      if (k.substring(i + 1) != labStyle) return;
+      if (k.startsWith('__BASE__') || k.substring(i + 1) != labStyle) return;
       final name = k.substring(0, i);
       if (labCat != 'All' && categoryOf(name) != labCat) return;
       entries.add(MapEntry(name, a));
     });
-    double? raceWin(List<double> a) => a[2] + a[3] > 0 ? a[2] / (a[2] + a[3]) : null;
-    double score(MapEntry<String, List<double>> e) => e.value[0] < minN ? -9 : (raceWin(e.value) ?? .5);
+    double score(MapEntry<String, List<double>> e) => e.value[0] < minN ? -99 : (labM(e.value, base)?.z ?? -98);
     entries.sort((a, b) => score(b).compareTo(score(a)));
-    // category summary (all indicators in a category pooled)
     final catSum = <String, List<double>>{};
     labAgg.forEach((k, a) {
       final i = k.lastIndexOf('|');
-      if (k.substring(i + 1) != labStyle) return;
-      final c = categoryOf(k.substring(0, i));
-      final t = catSum.putIfAbsent(c, () => [0, 0, 0, 0, 0]);
-      for (var x = 0; x < 5; x++) {
+      if (k.startsWith('__BASE__') || k.substring(i + 1) != labStyle) return;
+      final t = catSum.putIfAbsent(categoryOf(k.substring(0, i)), () => List<double>.filled(8, 0));
+      for (var x = 0; x < 8 && x < a.length; x++) {
         t[x] += a[x];
       }
     });
-    // style summary of the overall verdict
     final styleSum = <String, List<double>?>{for (final st in styles.skip(1)) st: labAgg['OVERALL verdict|$st']};
-    Color wc(double? w, double n) => n < minN || w == null ? Colors.grey : w >= .55 ? Colors.green : w <= .45 ? Colors.red : Colors.orange;
-    String pct(double? w) => w == null ? '-' : '${(w * 100).toStringAsFixed(0)}%';
+    Color zc(LabM? m, double n) => !reliable || n < minN || m == null ? Colors.grey : m.z >= 2 ? Colors.green : m.z <= -2 ? Colors.red : Colors.orange;
+    String edge(LabM? m) => m == null ? '-' : '${m.excessPts >= 0 ? '+' : ''}${m.excessPts.toStringAsFixed(0)} pts';
     return ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(12), children: [
       Card(
         child: Padding(
@@ -3109,7 +3184,7 @@ class _HomeState extends State<Home> {
               const Expanded(child: Text('Signal Lab', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
               Switch(value: labOn, onChanged: setLabOn),
             ]),
-            const Text('Records what every indicator said on the top coins at each candle close (15m, 1h, 4h, 1d), then checks what price did over the next 6 candles. Race test: did price move 1.5 ATR your way before 1.5 ATR against you. About 50% is a coin flip, so only results well away from 50% with 30+ signals mean anything.', style: TextStyle(fontSize: 12)),
+            const Text('Records what every indicator said on the top coins at each candle close (15m, 1h, 4h, 1d), then checks what price did over the next 6 candles. Race test: did price move 1.5 ATR your way before 1.5 ATR against you. Every score is compared with a random mix of buys and sells in the same market, so a falling day cannot make bearish indicators look smart.', style: TextStyle(fontSize: 12)),
             const SizedBox(height: 6),
             const Text('Coins to follow', style: TextStyle(fontSize: 12)),
             Wrap(spacing: 8, children: [
@@ -3126,19 +3201,40 @@ class _HomeState extends State<Home> {
         const Padding(padding: EdgeInsets.all(24), child: Text('No scored signals yet. Turn the Lab on and keep the app open. The first results arrive about 90 minutes later (6 candles on 15m), 6 hours for 1h, a day for 4h and 6 days for 1d. Everything is saved on the phone between sessions.', textAlign: TextAlign.center))
       else ...[
         Card(
+          color: reliable ? null : Colors.orange.withOpacity(.12),
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Trading styles: overall verdict accuracy', style: TextStyle(fontWeight: FontWeight.w700)),
+              Text(reliable ? 'Sample: $nMoments distinct candle closes' : 'Too early to trust: only $nMoments distinct candle closes (need $minMoments+)', style: const TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Text(reliable
+                  ? 'Colors show indicators clearly better (green) or worse (red) than a random mix of buys and sells.'
+                  : 'Coins that signal at the same close move together, so 40 coins count about as one. Rankings stay grey until there are enough separate closes, and ideally data from both rising and falling markets.', style: const TextStyle(fontSize: 12)),
+              if (base != null && base[1] + base[2] > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text('Market drift in this sample (${labStyle}): price hit -1.5 ATR first in ${(100 * base[2] / (base[1] + base[2])).toStringAsFixed(0)}% of decided races, and moved down in ${(100 * (1 - base[3] / base[0])).toStringAsFixed(0)}% of cases.', style: const TextStyle(fontSize: 12)),
+                ),
+            ]),
+          ),
+        ),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Trading styles: overall verdict', style: TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 4),
               for (final e in styleSum.entries)
-                Padding(
-                  padding: const EdgeInsets.only(top: 3),
-                  child: e.value == null
-                      ? Text('${e.key}: collecting', style: const TextStyle(fontSize: 12))
-                      : Text('${e.key}: ${e.value![0].toInt()} signals, race win ${pct(raceWin(e.value!))}, direction right ${(100 * e.value![1] / e.value![0]).toStringAsFixed(0)}%, avg ${(e.value![4] / e.value![0]).toStringAsFixed(2)} ATR',
-                          style: TextStyle(fontSize: 12, color: wc(raceWin(e.value!), e.value![0]))),
-                ),
+                Builder(builder: (_) {
+                  final m = e.value == null ? null : labM(e.value!, labAgg['__BASE__|${e.key}']);
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: e.value == null || m == null
+                        ? Text('${e.key}: collecting', style: const TextStyle(fontSize: 12))
+                        : Text('${e.key}: ${e.value![0].toInt()} signals, wins ${m.winPct.toStringAsFixed(0)}% vs ${m.basePct.toStringAsFixed(0)}% expected (${edge(m)})',
+                            style: TextStyle(fontSize: 12, color: zc(m, e.value![0]))),
+                  );
+                }),
               const SizedBox(height: 4),
               const Text('Scalping = 15m (and 5m if added), Intraday = 1h, Swing = 4h, Position = 1d.', style: TextStyle(fontSize: 11)),
             ]),
@@ -3147,24 +3243,30 @@ class _HomeState extends State<Home> {
         Wrap(spacing: 8, children: [for (final x in styles) ChoiceChip(label: Text(x), selected: labStyle == x, onSelected: (_) => setState(() => labStyle = x))]),
         if (catSum.isNotEmpty) ...[
           const Padding(padding: EdgeInsets.fromLTRB(4, 12, 4, 2), child: Text('Indicator families (pooled)', style: TextStyle(fontWeight: FontWeight.w600))),
-          for (final e in (catSum.entries.toList()..sort((a, b) => (raceWin(b.value) ?? 0).compareTo(raceWin(a.value) ?? 0))))
-            ListTile(
-              dense: true,
-              title: Text(e.key),
-              subtitle: Text('${e.value[0].toInt()} signals, direction right ${(100 * e.value[1] / e.value[0]).toStringAsFixed(0)}%'),
-              trailing: Text('race ${pct(raceWin(e.value))}', style: TextStyle(fontWeight: FontWeight.w600, color: wc(raceWin(e.value), e.value[0]))),
-            ),
+          for (final e in (catSum.entries.toList()..sort((a, b) => (labM(b.value, base)?.z ?? -98).compareTo(labM(a.value, base)?.z ?? -98))))
+            Builder(builder: (_) {
+              final m = labM(e.value, base);
+              return ListTile(
+                dense: true,
+                title: Text(e.key),
+                subtitle: Text('${e.value[0].toInt()} signals${m == null ? '' : ', wins ${m.winPct.toStringAsFixed(0)}% vs ${m.basePct.toStringAsFixed(0)}% expected'}'),
+                trailing: Text(edge(m), style: TextStyle(fontWeight: FontWeight.w600, color: zc(m, e.value[0]))),
+              );
+            }),
         ],
-        const Padding(padding: EdgeInsets.fromLTRB(4, 12, 4, 2), child: Text('Every indicator, best first', style: TextStyle(fontWeight: FontWeight.w600))),
+        const Padding(padding: EdgeInsets.fromLTRB(4, 12, 4, 2), child: Text('Every indicator, best edge first', style: TextStyle(fontWeight: FontWeight.w600))),
         Wrap(spacing: 6, children: [for (final x in cats) ChoiceChip(label: Text(x, style: const TextStyle(fontSize: 11)), selected: labCat == x, onSelected: (_) => setState(() => labCat = x))]),
         if (entries.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('No data for this style yet.')),
         for (final e in entries.take(80))
-          ListTile(
-            dense: true,
-            title: Text(e.key),
-            subtitle: Text('${e.value[0].toInt()} signals${e.value[0] < minN ? ' (need $minN+)' : ''}, direction right ${(100 * e.value[1] / e.value[0]).toStringAsFixed(0)}%, avg ${(e.value[4] / e.value[0]).toStringAsFixed(2)} ATR'),
-            trailing: Text('race ${pct(raceWin(e.value))}', style: TextStyle(fontWeight: FontWeight.w600, color: wc(raceWin(e.value), e.value[0]))),
-          ),
+          Builder(builder: (_) {
+            final m = labM(e.value, base);
+            return ListTile(
+              dense: true,
+              title: Text(e.key),
+              subtitle: Text('${e.value[0].toInt()} signals${e.value[0] < minN ? ' (need $minN+)' : ''}${m == null ? '' : ', wins ${m.winPct.toStringAsFixed(0)}% vs ${m.basePct.toStringAsFixed(0)}% expected'}, avg ${(e.value[4] / e.value[0]).toStringAsFixed(2)} ATR'),
+              trailing: Text(edge(m), style: TextStyle(fontWeight: FontWeight.w600, color: zc(m, e.value[0]))),
+            );
+          }),
       ],
       Card(
         child: Padding(
@@ -3172,7 +3274,7 @@ class _HomeState extends State<Home> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Download Lab data', style: TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
-            const Text('Accuracy table: one row per indicator and style. Snapshots: the raw vote of every indicator at each signal with what happened next (last 1,500). Send these to tune the bot.', style: TextStyle(fontSize: 12)),
+            const Text('Accuracy table: one row per indicator and style, with the expected score from market drift. Snapshots: the raw vote of every indicator at each signal with what happened next (last 1,500). Send these to tune the bot.', style: TextStyle(fontSize: 12)),
             const SizedBox(height: 8),
             Wrap(spacing: 8, children: [
               ElevatedButton.icon(onPressed: shareLabAcc, icon: const Icon(Icons.download), label: const Text('Accuracy table')),
@@ -3183,7 +3285,7 @@ class _HomeState extends State<Home> {
           ]),
         ),
       ),
-      const Padding(padding: EdgeInsets.only(top: 8), child: Text('Collecting only happens while the app is open. Past results never guarantee future ones, and an indicator can look good over a short window by luck. Trust it only with hundreds of signals.', style: TextStyle(fontSize: 11))),
+      const Padding(padding: EdgeInsets.only(top: 8), child: Text('Collecting only happens while the app is open. Past results never guarantee future ones, and an indicator can look good over a short window by luck.', style: TextStyle(fontSize: 11))),
     ]);
   }
 
