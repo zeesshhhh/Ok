@@ -79,3 +79,11 @@ Builds are now signed with a fixed key (app_src/debug.keystore) and a rising ver
 
 - Trades live on the phone only. Clearing app data or Reset deletes them, so download first.
 Telegram stays your push-notification channel. The app is for viewing.
+
+## Daily strategy accuracy optimizer
+
+The bot now runs a daily optimizer at 05:00 UTC. It re-runs the backtest across the configured watchlist, calculates Win %, Profit Factor, Avg R, Total R, maximum drawdown and a risk-adjusted score, and writes `strategy_state.json` plus the dated `strategy_performance.csv` history.
+
+Live signals automatically use the optimizer's active strategy set for the **proven/experimental** label. Selection requires at least 30 trades and positive expectancy/PF, and uses more than win rate alone so a small sample cannot dominate the ranking.
+
+The daily Telegram update reports the active strategies and their current accuracy/win rate.
