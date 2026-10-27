@@ -68,9 +68,21 @@ The bot publishes `docs/feed.json` after each run. The app reads it, so the repo
 - Download logs: in-app CSV, bot CSV, or both at once (share sheet, or copy to clipboard). Column names match, so the two can be compared. Send the files to tune the bot.
 
 ### Keeping your data between installs
+The build now also writes the fixed key into the Gradle signing config, and a build step prints the certificate. A correct build shows a SHA-256 ending in 95:89:00 (Actions, Build APK, step "Show signing certificate"). If it shows anything else, Android will refuse to install it over the old app.
+
 Builds are now signed with a fixed key (app_src/debug.keystore) and a rising version number, so a new APK installs over the old one and keeps your paper trades and Lab data. The one time you move from an older APK to this one, Android will ask you to uninstall first, which erases the old data. Use All logs to export before that. Data is stored as files in the app's own folder, written safely, and never overwritten if it cannot be read.
 
-### Signal Lab (Lab tab)
+### Server-side Signal Lab (runs 24/7, no app needed)
+`lab.py` runs inside the same GitHub Actions bot, right after each scan, so collection no longer stops when the phone app is closed.
+- It follows the top 40 USDT perpetuals (OKX data) on 15m, 1h, 4h and 1d, using the same indicator names and rules as the app (47 indicators plus the overall verdict). Change `LAB_TOP_N` and `LAB_TFS` in the workflow env if you want more or fewer.
+- The first runs backfill history (about 1,500 candles per pair), computing each indicator only from data available at that candle, so thousands of scored signals exist straight away and cover more than one market regime. Later runs add only candles that closed since the last run. A run stops starting new work after 12 minutes and continues next time, so the full backfill may take a few runs.
+- Results go to a separate branch called `lab-data` (history is not kept, so your repo does not grow). The branch is created by the first run. Raw files: `https://raw.githubusercontent.com/<you>/<repo>/lab-data/lab.json`, `lab_accuracy.csv`, `lab_snapshots.csv`.
+- The Lab tab in the app now defaults to Server (24/7) and shows the same drift-adjusted rankings. Pull down to refresh. The phone collector is still there under This phone.
+- Run it by hand any time: Actions, Signal bot, Run workflow, mode `lab`.
+- Needs the repo to be public (same as the feed) and Actions write permission (already set).
+- Honest limits: backfilled coins are the top by volume today, 15-minute cron runs can be delayed by GitHub, and neighbouring candles overlap, so the app shows "independent windows" (distinct closes divided by 6) and keeps rankings grey until there are 30 or more.
+
+### Signal Lab on the phone (Lab tab, This phone)
 - Switch it on and keep the app open. At every candle close (15m, 1h, 4h, 1d, optional 5m) for the top 10, 20 or 40 coins, it records the vote of every indicator (trend, momentum, volume, breakout, support/resistance, candle patterns, overall verdict).
 - 6 candles later it scores each vote: direction right or wrong, how far price moved in ATR, and a race test (+1.5 ATR before -1.5 ATR).
 - The tab compares trading styles (Scalping 15m, Intraday 1h, Swing 4h, Position 1d), indicator families and each single indicator, best first. Anything under 30 signals is greyed out.

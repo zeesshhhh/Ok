@@ -107,7 +107,7 @@ def scan():
             return
         found.setdefault(sym, []).append({**s, "strategy": name, "tf": tf, "entry": live, "key": key,
                                           "hold_h": hold, "style": style,
-                                          "grade": "proven" if name in active_proven() and sym in WATCHLIST else "experimental"})
+                                          "grade": "proven" if name in PROVEN and sym in WATCHLIST else "experimental"})
 
     for sym, asset in watch.items():
         rows[sym] = {}

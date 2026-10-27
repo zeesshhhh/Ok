@@ -72,16 +72,3 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
-
-# Daily optimizer state. Falls back to the manually proven set if no optimizer state exists.
-STRATEGY_STATE_FILE = "strategy_state.json"
-
-def active_proven():
-    try:
-        import json
-        with open(STRATEGY_STATE_FILE) as f:
-            state = json.load(f)
-        active = state.get("active", [])
-        return set(active) if active else set(PROVEN)
-    except Exception:
-        return set(PROVEN)
