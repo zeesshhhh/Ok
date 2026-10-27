@@ -3295,7 +3295,7 @@ class _HomeState extends State<Home> {
         ),
       ),
       if (aggSrc.isEmpty)
-        const Padding(padding: EdgeInsets.all(24), child: Text(srv ? 'No server data yet. The bot writes it on its next run after you add the new lab.py and workflow (the first run backfills history, so results appear at once). Pull down to refresh.' : 'No scored signals yet. Turn collecting on and keep the app open. The first results arrive about 90 minutes later (6 candles on 15m), 6 hours for 1h, a day for 4h and 6 days for 1d.', textAlign: TextAlign.center))
+        Padding(padding: const EdgeInsets.all(24), child: Text(srv ? 'No server data yet. The bot writes it on its next run after you add the new lab.py and workflow (the first run backfills history, so results appear at once). Pull down to refresh.' : 'No scored signals yet. Turn collecting on and keep the app open. The first results arrive about 90 minutes later (6 candles on 15m), 6 hours for 1h, a day for 4h and 6 days for 1d.', textAlign: TextAlign.center))
       else ...[
         Card(
           color: reliable ? null : Colors.orange.withOpacity(.12),
@@ -3382,7 +3382,7 @@ class _HomeState extends State<Home> {
           ]),
         ),
       ),
-      const Padding(padding: EdgeInsets.only(top: 8), child: Text(srv ? 'The server collects on its own, even when the app is closed. It backfills history on its first runs, so the sample can span rising and falling markets. Backfilled results use only data available at each candle, but they cover only coins that are top by volume today. Past results never guarantee future ones.' : 'Phone collecting only happens while the app is open. Past results never guarantee future ones, and an indicator can look good over a short window by luck.', style: TextStyle(fontSize: 11))),
+      Padding(padding: const EdgeInsets.only(top: 8), child: Text(srv ? 'The server collects on its own, even when the app is closed. It backfills history on its first runs, so the sample can span rising and falling markets. Backfilled results use only data available at each candle, but they cover only coins that are top by volume today. Past results never guarantee future ones.' : 'Phone collecting only happens while the app is open. Past results never guarantee future ones, and an indicator can look good over a short window by luck.', style: TextStyle(fontSize: 11))),
     ]));
   }
 
