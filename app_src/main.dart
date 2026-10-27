@@ -12,6 +12,12 @@ import 'dart:math' as math;
 
 const feedUrl = String.fromEnvironment('FEED_URL');
 
+/// Lab files live on their own branch (lab-data) so the repo history does not grow every 15 minutes.
+String labUrl(String name) {
+  final m = RegExp(r'^(https://raw\.githubusercontent\.com/[^/]+/[^/]+)/[^/]+/docs/feed\.json').firstMatch(feedUrl);
+  return m == null ? '' : '${m.group(1)}/lab-data/$name';
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const SignalApp());
@@ -1426,7 +1432,17 @@ class _HomeState extends State<Home> {
   int labCoins = 20, labScored = 0;
   String labStyle = 'All', labCat = 'All', labStatus = '';
   DateTime? labUpdated;
-  Timer? labTimer;
+  Timer? labTimer, srvTimer;
+  // Signal Lab data collected by the server bot (runs 24/7, no app needed)
+  Map<String, List<double>> srvAgg = {};
+  Map<String, int> srvMoments = {};
+  String srvStatus = '';
+  DateTime? srvUpdated;
+  int srvScored = 0, srvPairs = 0, srvPairsTotal = 0;
+  List<String> srvCoins = [], srvTfs = [];
+  bool srvLoading = false;
+  bool? labPref;                                   // null = pick the server automatically when it has data
+  bool get labServer => labPref ?? srvAgg.isNotEmpty;
 
   @override
   void initState() {
@@ -1450,6 +1466,8 @@ class _HomeState extends State<Home> {
     });
     loadLab();
     labTimer = Timer.periodic(const Duration(seconds: 60), (_) => labCycle());
+    loadServerLab();
+    srvTimer = Timer.periodic(const Duration(minutes: 5), (_) => loadServerLab());
   }
 
   @override
@@ -1462,6 +1480,7 @@ class _HomeState extends State<Home> {
     alertTimer?.cancel();
     paperTimer?.cancel();
     labTimer?.cancel();
+    srvTimer?.cancel();
     super.dispose();
   }
 
@@ -1541,6 +1560,55 @@ class _HomeState extends State<Home> {
 
   // ---------- Signal Lab ----------
   List<String> get labTfs => [if (lab5m) '5m', '15m', '1h', '4h', '1d'];
+
+  Future<String?> fetchText(String url, {bool quiet = false}) async {
+    if (url.isEmpty) return null;
+    try {
+      final r = await http.get(Uri.parse('$url?t=${DateTime.now().millisecondsSinceEpoch}')).timeout(const Duration(seconds: 30));
+      if (r.statusCode != 200) {
+        if (!quiet) toast('Not available yet (HTTP ${r.statusCode}). The server writes it after its first Lab run.');
+        return null;
+      }
+      return utf8.decode(r.bodyBytes);
+    } catch (e) {
+      if (!quiet) toast('Could not download: $e');
+      return null;
+    }
+  }
+
+  Future<void> loadServerLab() async {
+    if (srvLoading) return;
+    srvLoading = true;
+    try {
+      final raw = await fetchText(labUrl('lab.json'), quiet: true);
+      if (raw == null) {
+        if (srvAgg.isEmpty) srvStatus = 'No server Lab data yet. It appears after the updated bot has run once (the first run backfills history).';
+      } else {
+        final j = jsonDecode(raw) as Map<String, dynamic>;
+        srvAgg = {for (final e in (j['agg'] as Map).entries) '${e.key}': (e.value as List).map((x) => (x as num).toDouble()).toList()};
+        srvMoments = {for (final e in (j['moments'] as Map).entries) '${e.key}': (e.value as num).toInt()};
+        srvStatus = '${j['status'] ?? ''}';
+        srvUpdated = DateTime.tryParse('${j['updated']}');
+        srvScored = (j['scored'] as num?)?.toInt() ?? 0;
+        srvPairs = (j['pairs_done'] as num?)?.toInt() ?? 0;
+        srvPairsTotal = (j['pairs_total'] as num?)?.toInt() ?? 0;
+        srvCoins = [for (final x in (j['coins'] as List? ?? [])) '$x'];
+        srvTfs = [for (final x in (j['tfs'] as List? ?? [])) '$x'];
+      }
+    } catch (e) {
+      srvStatus = 'Could not read the server Lab data: $e';
+    } finally {
+      srvLoading = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> shareSrvFile(String file, String subject) async {
+    final t = await fetchText(labUrl(file));
+    if (t == null) return;
+    final f = await _writeTemp('server_$file', t);
+    if (f != null) await Share.shareXFiles([XFile(f.path, mimeType: 'text/csv')], subject: subject);
+  }
 
   Future<void> loadLab() async {
     try {
@@ -2028,6 +2096,14 @@ class _HomeState extends State<Home> {
       if (a != null) files.add(XFile(a.path, mimeType: 'text/csv'));
       final b = await _writeTemp('lab_signal_snapshots.csv', labRowsCsv(labRows));
       if (b != null) files.add(XFile(b.path, mimeType: 'text/csv'));
+    }
+    if (labServer) {
+      for (final n in ['lab_accuracy.csv', 'lab_snapshots.csv']) {
+        final t = await fetchText(labUrl(n), quiet: true);
+        if (t == null) continue;
+        final f = await _writeTemp('server_$n', t);
+        if (f != null) files.add(XFile(f.path, mimeType: 'text/csv'));
+      }
     }
     if (files.isEmpty) return toast('Nothing to share yet.');
     try {
@@ -3143,18 +3219,23 @@ class _HomeState extends State<Home> {
     const styles = ['All', 'Scalping', 'Intraday', 'Swing', 'Position'];
     const cats = ['All', 'Overall verdict', 'Trend', 'Momentum / oscillators', 'Volume', 'Breakout / volatility', 'Support / resistance', 'Candle patterns'];
     const minN = 30, minMoments = 30;
-    // signals logged at the same candle close move together, so count distinct closes as the real sample size
-    final moments = <String, Set<int>>{};
-    for (final r in labRows) {
-      final t = r.t0.millisecondsSinceEpoch;
-      moments.putIfAbsent('All', () => {}).add(t);
-      moments.putIfAbsent(styleOf(r.tf), () => {}).add(t);
+    final srv = labServer;
+    final aggSrc = srv ? srvAgg : labAgg;
+    // coins that signal at the same candle close move together and 6-candle windows overlap, so the real sample is distinct closes / 6
+    int nMoments;
+    if (srv) {
+      nMoments = srvMoments[labStyle] ?? 0;
+    } else {
+      final distinct = <int>{};
+      for (final r in labRows) {
+        if (labStyle == 'All' || styleOf(r.tf) == labStyle) distinct.add(r.t0.millisecondsSinceEpoch);
+      }
+      nMoments = (distinct.length / labHorizonBars).ceil();
     }
-    final nMoments = moments[labStyle]?.length ?? 0;
     final reliable = nMoments >= minMoments;
-    final base = labAgg['__BASE__|$labStyle'];
+    final base = aggSrc['__BASE__|$labStyle'];
     final entries = <MapEntry<String, List<double>>>[];
-    labAgg.forEach((k, a) {
+    aggSrc.forEach((k, a) {
       final i = k.lastIndexOf('|');
       if (k.startsWith('__BASE__') || k.substring(i + 1) != labStyle) return;
       final name = k.substring(0, i);
@@ -3164,7 +3245,7 @@ class _HomeState extends State<Home> {
     double score(MapEntry<String, List<double>> e) => e.value[0] < minN ? -99 : (labM(e.value, base)?.z ?? -98);
     entries.sort((a, b) => score(b).compareTo(score(a)));
     final catSum = <String, List<double>>{};
-    labAgg.forEach((k, a) {
+    aggSrc.forEach((k, a) {
       final i = k.lastIndexOf('|');
       if (k.startsWith('__BASE__') || k.substring(i + 1) != labStyle) return;
       final t = catSum.putIfAbsent(categoryOf(k.substring(0, i)), () => List<double>.filled(8, 0));
@@ -3172,44 +3253,60 @@ class _HomeState extends State<Home> {
         t[x] += a[x];
       }
     });
-    final styleSum = <String, List<double>?>{for (final st in styles.skip(1)) st: labAgg['OVERALL verdict|$st']};
+    final styleSum = <String, List<double>?>{for (final st in styles.skip(1)) st: aggSrc['OVERALL verdict|$st']};
     Color zc(LabM? m, double n) => !reliable || n < minN || m == null ? Colors.grey : m.z >= 2 ? Colors.green : m.z <= -2 ? Colors.red : Colors.orange;
     String edge(LabM? m) => m == null ? '-' : '${m.excessPts >= 0 ? '+' : ''}${m.excessPts.toStringAsFixed(0)} pts';
-    return ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(12), children: [
+    return RefreshIndicator(onRefresh: loadServerLab, child: ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(12), children: [
       Card(
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              const Expanded(child: Text('Signal Lab', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
-              Switch(value: labOn, onChanged: setLabOn),
-            ]),
-            const Text('Records what every indicator said on the top coins at each candle close (15m, 1h, 4h, 1d), then checks what price did over the next 6 candles. Race test: did price move 1.5 ATR your way before 1.5 ATR against you. Every score is compared with a random mix of buys and sells in the same market, so a falling day cannot make bearish indicators look smart.', style: TextStyle(fontSize: 12)),
-            const SizedBox(height: 6),
-            const Text('Coins to follow', style: TextStyle(fontSize: 12)),
+            const Text('Signal Lab', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+            const SizedBox(height: 4),
+            const Text('Records what every indicator said at each candle close, then checks what price did over the next 6 candles. Race test: did price move 1.5 ATR your way before 1.5 ATR against you. Every score is compared with a random mix of buys and sells in the same market, so a falling day cannot make bearish indicators look smart.', style: TextStyle(fontSize: 12)),
+            const SizedBox(height: 8),
             Wrap(spacing: 8, children: [
-              for (final n in [10, 20, 40])
-                ChoiceChip(label: Text('Top $n'), selected: labCoins == n, onSelected: (_) { setState(() => labCoins = n); saveLab(); }),
-              FilterChip(label: const Text('Add 5m scalping'), selected: lab5m, onSelected: (v) { setState(() => lab5m = v); saveLab(); }),
+              ChoiceChip(label: const Text('Server (24/7)'), selected: srv, onSelected: (_) => setState(() => labPref = true)),
+              ChoiceChip(label: const Text('This phone'), selected: !srv, onSelected: (_) => setState(() => labPref = false)),
             ]),
-            if (labStatus.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 6), child: Text(labStatus, style: const TextStyle(fontSize: 11))),
-            if (labBusy) const Padding(padding: EdgeInsets.only(top: 6), child: LinearProgressIndicator()),
+            if (srv) ...[
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(srvUpdated == null ? srvStatus : 'Updated ${ago(srvUpdated!.toIso8601String())}. $srvStatus', style: const TextStyle(fontSize: 11)),
+              ),
+              if (srvCoins.isNotEmpty)
+                Text('Following ${srvCoins.length} coins on ${srvTfs.join(', ')}. $srvScored signal sets scored, $srvPairs of $srvPairsTotal pairs started. Pull down to refresh.', style: const TextStyle(fontSize: 11)),
+              if (srvLoading) const Padding(padding: EdgeInsets.only(top: 6), child: LinearProgressIndicator()),
+            ] else ...[
+              Row(children: [
+                const Expanded(child: Text('Collect on this phone (only while the app is open)', style: TextStyle(fontSize: 12))),
+                Switch(value: labOn, onChanged: setLabOn),
+              ]),
+              const Text('Coins to follow', style: TextStyle(fontSize: 12)),
+              Wrap(spacing: 8, children: [
+                for (final n in [10, 20, 40])
+                  ChoiceChip(label: Text('Top $n'), selected: labCoins == n, onSelected: (_) { setState(() => labCoins = n); saveLab(); }),
+                FilterChip(label: const Text('Add 5m scalping'), selected: lab5m, onSelected: (v) { setState(() => lab5m = v); saveLab(); }),
+              ]),
+              if (labStatus.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 6), child: Text(labStatus, style: const TextStyle(fontSize: 11))),
+              if (labBusy) const Padding(padding: EdgeInsets.only(top: 6), child: LinearProgressIndicator()),
+            ],
           ]),
         ),
       ),
-      if (labAgg.isEmpty)
-        const Padding(padding: EdgeInsets.all(24), child: Text('No scored signals yet. Turn the Lab on and keep the app open. The first results arrive about 90 minutes later (6 candles on 15m), 6 hours for 1h, a day for 4h and 6 days for 1d. Everything is saved on the phone between sessions.', textAlign: TextAlign.center))
+      if (aggSrc.isEmpty)
+        const Padding(padding: EdgeInsets.all(24), child: Text(srv ? 'No server data yet. The bot writes it on its next run after you add the new lab.py and workflow (the first run backfills history, so results appear at once). Pull down to refresh.' : 'No scored signals yet. Turn collecting on and keep the app open. The first results arrive about 90 minutes later (6 candles on 15m), 6 hours for 1h, a day for 4h and 6 days for 1d.', textAlign: TextAlign.center))
       else ...[
         Card(
           color: reliable ? null : Colors.orange.withOpacity(.12),
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(reliable ? 'Sample: $nMoments distinct candle closes' : 'Too early to trust: only $nMoments distinct candle closes (need $minMoments+)', style: const TextStyle(fontWeight: FontWeight.w700)),
+              Text(reliable ? 'Sample: about $nMoments independent windows' : 'Too early to trust: only about $nMoments independent windows (need $minMoments+)', style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 2),
               Text(reliable
                   ? 'Colors show indicators clearly better (green) or worse (red) than a random mix of buys and sells.'
-                  : 'Coins that signal at the same close move together, so 40 coins count about as one. Rankings stay grey until there are enough separate closes, and ideally data from both rising and falling markets.', style: const TextStyle(fontSize: 12)),
+                  : 'Coins that signal at the same close move together and neighbouring candles overlap, so thousands of signals can still be only a few independent windows. Rankings stay grey until there are enough, and ideally data from both rising and falling markets.', style: const TextStyle(fontSize: 12)),
               if (base != null && base[1] + base[2] > 0)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
@@ -3226,7 +3323,7 @@ class _HomeState extends State<Home> {
               const SizedBox(height: 4),
               for (final e in styleSum.entries)
                 Builder(builder: (_) {
-                  final m = e.value == null ? null : labM(e.value!, labAgg['__BASE__|${e.key}']);
+                  final m = e.value == null ? null : labM(e.value!, aggSrc['__BASE__|${e.key}']);
                   return Padding(
                     padding: const EdgeInsets.only(top: 3),
                     child: e.value == null || m == null
@@ -3277,16 +3374,16 @@ class _HomeState extends State<Home> {
             const Text('Accuracy table: one row per indicator and style, with the expected score from market drift. Snapshots: the raw vote of every indicator at each signal with what happened next (last 1,500). Send these to tune the bot.', style: TextStyle(fontSize: 12)),
             const SizedBox(height: 8),
             Wrap(spacing: 8, children: [
-              ElevatedButton.icon(onPressed: shareLabAcc, icon: const Icon(Icons.download), label: const Text('Accuracy table')),
-              OutlinedButton.icon(onPressed: shareLabRows, icon: const Icon(Icons.table_chart), label: const Text('Raw snapshots')),
+              ElevatedButton.icon(onPressed: srv ? () => shareSrvFile('lab_accuracy.csv', 'Indicator accuracy (server)') : shareLabAcc, icon: const Icon(Icons.download), label: const Text('Accuracy table')),
+              OutlinedButton.icon(onPressed: srv ? () => shareSrvFile('lab_snapshots.csv', 'Signal snapshots (server)') : shareLabRows, icon: const Icon(Icons.table_chart), label: const Text('Raw snapshots')),
               OutlinedButton.icon(onPressed: shareBothLogs, icon: const Icon(Icons.folder_zip), label: const Text('All logs')),
             ]),
-            Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: resetLab, icon: const Icon(Icons.delete_outline), label: const Text('Reset Lab'))),
+            if (!srv) Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: resetLab, icon: const Icon(Icons.delete_outline), label: const Text('Reset phone Lab'))),
           ]),
         ),
       ),
-      const Padding(padding: EdgeInsets.only(top: 8), child: Text('Collecting only happens while the app is open. Past results never guarantee future ones, and an indicator can look good over a short window by luck.', style: TextStyle(fontSize: 11))),
-    ]);
+      const Padding(padding: EdgeInsets.only(top: 8), child: Text(srv ? 'The server collects on its own, even when the app is closed. It backfills history on its first runs, so the sample can span rising and falling markets. Backfilled results use only data available at each candle, but they cover only coins that are top by volume today. Past results never guarantee future ones.' : 'Phone collecting only happens while the app is open. Past results never guarantee future ones, and an indicator can look good over a short window by luck.', style: TextStyle(fontSize: 11))),
+    ]));
   }
 
   Widget reportTab() {
