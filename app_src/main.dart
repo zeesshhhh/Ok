@@ -1205,7 +1205,7 @@ String categoryOf(String n) {
   const vol = ['VWAP', 'VWMA', 'MFI', 'OBV', 'Chaikin', 'Last closed candle volume'];
   const brk = ['Bollinger', 'Donchian', 'Keltner', 'Squeeze'];
   const sr = ['Support', 'Fib', 'Pivot'];
-  if (n.startsWith('OVERALL')) return 'Overall verdict';
+  if (n.startsWith('OVERALL') || n.startsWith('COMPOSITE')) return 'Overall verdict';
   if (n.startsWith('Candle pattern')) return 'Candle patterns';
   if (vol.any(n.startsWith)) return 'Volume';
   if (brk.any(n.startsWith)) return 'Breakout / volatility';
@@ -3216,7 +3216,7 @@ class _HomeState extends State<Home> {
   }
 
   Widget labTab() {
-    const styles = ['All', 'Scalping', 'Intraday', 'Swing', 'Position'];
+    const styles = ['All', 'Forward', 'Scalping', 'Intraday', 'Swing', 'Position'];
     const cats = ['All', 'Overall verdict', 'Trend', 'Momentum / oscillators', 'Volume', 'Breakout / volatility', 'Support / resistance', 'Candle patterns'];
     const minN = 30, minMoments = 30;
     final srv = labServer;
@@ -3294,6 +3294,48 @@ class _HomeState extends State<Home> {
           ]),
         ),
       ),
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Builder(builder: (_) {
+            final placed = trades.toList()..sort((a, b) => b.opened.compareTo(a.opened));
+            String sg(double v) => '${v >= 0 ? '+' : ''}${v.toStringAsFixed(2)}';
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Trades placed', style: TextStyle(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              if (placed.isEmpty)
+                const Text('No paper trades yet. Turn on Auto paper trading in the Paper tab and they will appear here, next to what the Lab measured for the same timeframe style.', style: TextStyle(fontSize: 12))
+              else ...[
+                const Text('Paper trades by style, next to the Lab result for the overall verdict on the same style.', style: TextStyle(fontSize: 12)),
+                const SizedBox(height: 4),
+                for (final st in const ['Scalping', 'Intraday', 'Swing', 'Position'])
+                  Builder(builder: (_) {
+                    final tt = placed.where((t) => styleOf(t.tf) == st).toList();
+                    if (tt.isEmpty) return const SizedBox.shrink();
+                    final ps = PStats(tt);
+                    final m = aggSrc['OVERALL verdict|$st'] == null ? null : labM(aggSrc['OVERALL verdict|$st']!, aggSrc['__BASE__|$st']);
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text('$st: ${tt.length} placed (${tt.where((t) => t.isOpen).length} open), ${ps.n == 0 ? 'none closed yet' : 'wins ${ps.winPct.toStringAsFixed(0)}%, ${sg(ps.avgR)}R average'}.  Lab verdict: ${m == null ? 'collecting' : '${m.winPct.toStringAsFixed(0)}% vs ${m.basePct.toStringAsFixed(0)}% expected'}',
+                          style: const TextStyle(fontSize: 12)),
+                    );
+                  }),
+                const Padding(padding: EdgeInsets.fromLTRB(0, 10, 0, 2), child: Text('Latest trades', style: TextStyle(fontWeight: FontWeight.w600))),
+                for (final t in placed.take(15))
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('${t.coin} ${t.side == 1 ? 'BUY' : 'SELL'}  ${t.tf} (${styleOf(t.tf)})', style: TextStyle(fontWeight: FontWeight.w600, color: t.side == 1 ? Colors.green : Colors.red)),
+                    subtitle: Text('Placed ${ago(t.opened.toIso8601String())} at ${fmtPrice(t.entry)}  SL ${fmtPrice(t.sl)}  TP ${fmtPrice(t.tp)}\n${t.isOpen ? 'Open' : 'Closed by ${t.reason}'}, quality ${t.quality}/5, ${t.verdict}'),
+                    isThreeLine: true,
+                    trailing: Text(t.isOpen ? 'open' : '${sg(t.r)} R', style: TextStyle(fontWeight: FontWeight.w600, color: t.isOpen ? Colors.grey : (t.r >= 0 ? Colors.green : Colors.red))),
+                  ),
+                if (placed.length > 15) Text('Showing the latest 15 of ${placed.length}. All of them are in the Paper tab and its CSV.', style: const TextStyle(fontSize: 11)),
+              ],
+            ]);
+          }),
+        ),
+      ),
       if (aggSrc.isEmpty)
         Padding(padding: const EdgeInsets.all(24), child: Text(srv ? 'No server data yet. The bot writes it on its next run after you add the new lab.py and workflow (the first run backfills history, so results appear at once). Pull down to refresh.' : 'No scored signals yet. Turn collecting on and keep the app open. The first results arrive about 90 minutes later (6 candles on 15m), 6 hours for 1h, a day for 4h and 6 days for 1d.', textAlign: TextAlign.center))
       else ...[
@@ -3333,7 +3375,7 @@ class _HomeState extends State<Home> {
                   );
                 }),
               const SizedBox(height: 4),
-              const Text('Scalping = 15m (and 5m if added), Intraday = 1h, Swing = 4h, Position = 1d.', style: TextStyle(fontSize: 11)),
+              const Text('Scalping = 15m (and 5m if added), Intraday = 1h, Swing = 4h, Position = 1d. Forward = only candles that closed after the composite rules were fixed, so it is the fair out-of-sample test.', style: TextStyle(fontSize: 11)),
             ]),
           ),
         ),
