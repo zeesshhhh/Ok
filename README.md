@@ -82,6 +82,11 @@ Builds are now signed with a fixed key (app_src/debug.keystore) and a rising ver
 - Needs the repo to be public (same as the feed) and Actions write permission (already set).
 - Honest limits: backfilled coins are the top by volume today, 15-minute cron runs can be delayed by GitHub, and neighbouring candles overlap, so the app shows "independent windows" (distinct closes divided by 6) and keeps rankings grey until there are 30 or more.
 
+The Lab tab also has a Trades placed card: paper trades grouped by style (Scalping, Intraday, Swing, Position) next to the Lab's result for the same style, plus the latest 15 trades with entry, stop, target, quality and result.
+
+### Candidate composites and the Forward test
+The server Lab also scores fixed composite rules: the trend-following family only, the contrarian oscillators only, and the app's own verdict split by ADX regime (above 25, 20 to 25, below 20). The rules are fixed and not tuned. The first run of this version rebuilds the Lab from history once (a few runs), then the Forward style counts only candles that closed after that moment, so it is a fair out-of-sample test. Judge the composites on Forward, not on the history.
+
 ### Signal Lab on the phone (Lab tab, This phone)
 - Switch it on and keep the app open. At every candle close (15m, 1h, 4h, 1d, optional 5m) for the top 10, 20 or 40 coins, it records the vote of every indicator (trend, momentum, volume, breakout, support/resistance, candle patterns, overall verdict).
 - 6 candles later it scores each vote: direction right or wrong, how far price moved in ATR, and a race test (+1.5 ATR before -1.5 ATR).

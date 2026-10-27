@@ -431,7 +431,27 @@ def compute_votes(d):
         side = np.where(score >= .2, 1.0, np.where(score <= -.2, -1.0, 0.0))
         S["OVERALL verdict"] = np.where(side != 0, side, 0.0)
         S["OVERALL strong verdict"] = np.where(np.abs(score) >= .5, side, 0.0)
-        for k in ("OVERALL verdict", "OVERALL strong verdict"):
+        # Candidate composites. They are fixed rules written down before any forward data existed, so the "Forward" style
+        # (candles that closed after the first run of this version) is a fair out-of-sample test of them.
+        trend_sel = np.array([k not in MR for k in names])
+        mr_sel = ~trend_sel
+
+        def comp(sel, thr):
+            pr = present[sel].sum(axis=0)
+            sc = np.where(pr == 0, 0.0, sig[sel].sum(axis=0) / np.where(pr == 0, 1, pr))
+            return np.where(sc >= thr, 1.0, np.where(sc <= -thr, -1.0, 0.0))
+        ct, cts, cm = comp(trend_sel, .2), comp(trend_sel, .5), comp(mr_sel, .2)
+        S["COMPOSITE trend-following"] = ct
+        S["COMPOSITE trend-following strong"] = cts
+        S["COMPOSITE contrarian"] = cm
+        valid = ~np.isnan(adx_valid)
+        regimes = (("ADX>25", valid & (adx_valid > 25)), ("ADX 20-25", valid & (adx_valid >= 20) & (adx_valid <= 25)), ("ADX<20", valid & (adx_valid < 20)))
+        for tag, mk in regimes:
+            S[f"OVERALL verdict [{tag}]"] = np.where(mk, S["OVERALL verdict"], 0.0)
+        for tag, mk in (regimes[0], regimes[2]):
+            S[f"COMPOSITE trend-following [{tag}]"] = np.where(mk, ct, 0.0)
+            S[f"COMPOSITE contrarian [{tag}]"] = np.where(mk, cm, 0.0)
+        for k in [k for k in S if k.startswith(("OVERALL", "COMPOSITE"))]:
             S[k][:30] = np.nan
     return S, atr, score
 
@@ -526,26 +546,35 @@ def empty_row():
     return [0.0] * 8
 
 
-def add_to_agg(agg, tf, votes, idx, move, race):
+def add_to_agg(agg, tf, votes, idx, move, race, fwd=None):
     """agg row: [n, directionHits, raceWins, raceLosses, sumSignedMoveAtr, decidedBuys, decidedSells, buyVotes]
     '__BASE__|style' row: [snapshots, upFirst, downFirst, movedUp, 0, 0, 0, 0]"""
     style = STYLE[tf]
     dec = race != 0
-    for key in (f"__BASE__|{style}", "__BASE__|All"):
-        b = agg.setdefault(key, empty_row())
-        b[0] += len(idx)
-        b[1] += float((race == 1).sum())
-        b[2] += float((race == -1).sum())
-        b[3] += float((move > 0).sum())
+    if fwd is None:
+        fwd = np.zeros(len(idx), dtype=bool)
+    # every signal counts under its style and "All"; signals after the forward start also count under "Forward"
+    groups = [(style, np.ones(len(idx), dtype=bool)), ("All", np.ones(len(idx), dtype=bool)), ("Forward", fwd)]
+    for gname, gm in groups:
+        if not gm.any():
+            continue
+        b = agg.setdefault(f"__BASE__|{gname}", empty_row())
+        b[0] += float(gm.sum())
+        b[1] += float(((race == 1) & gm).sum())
+        b[2] += float(((race == -1) & gm).sum())
+        b[3] += float(((move > 0) & gm).sum())
     for name, arr in votes.items():
         vs = np.nan_to_num(arr[idx])
         for sig in (1.0, -1.0):
-            m = vs == sig
-            cnt = float(m.sum())
-            if cnt == 0:
+            m0 = vs == sig
+            if not m0.any():
                 continue
-            for key in (f"{name}|{style}", f"{name}|All"):
-                a = agg.setdefault(key, empty_row())
+            for gname, gm in groups:
+                m = m0 & gm
+                cnt = float(m.sum())
+                if cnt == 0:
+                    continue
+                a = agg.setdefault(f"{name}|{gname}", empty_row())
                 a[0] += cnt
                 a[1] += float((m & (move * sig > 0)).sum())
                 a[2] += float((m & (race == sig)).sum())
@@ -564,7 +593,7 @@ def category_of(n):
     vol = ("VWAP", "VWMA", "MFI", "OBV", "Chaikin", "Last closed candle volume")
     brk = ("Bollinger", "Donchian", "Keltner", "Squeeze")
     sr = ("Support", "Fib", "Pivot")
-    if n.startswith("OVERALL"):
+    if n.startswith(("OVERALL", "COMPOSITE")):
         return "Overall verdict"
     if n.startswith("Candle pattern"):
         return "Candle patterns"
@@ -620,6 +649,13 @@ def acc_csv(agg):
 
 
 def effective_moments(state):
+    out = _effective_moments(state)
+    elapsed = max(0, int(time.time() * 1000) - state.get("forward_start", int(time.time() * 1000)))
+    out["Forward"] = int(elapsed // (HORIZON * BAR_MS["15m"]))        # independent 90 minute windows since the forward start
+    return out
+
+
+def _effective_moments(state):
     """Distinct candle closes divided by the horizon. Windows overlap and coins signal together, so neither counts as independent."""
     per_tf = {tf: (hi - lo) // (BAR_MS[tf] // 60000) + 1 for tf, (lo, hi) in state["moments"].items() if tf in BAR_MS}
     out = {st: int(math.ceil(sum(c for tf, c in per_tf.items() if STYLE.get(tf) == st) / HORIZON)) for st in STYLES}
@@ -628,16 +664,27 @@ def effective_moments(state):
 
 
 # ---------------------------------------------------------------- main
+LAB_VERSION = 2       # bump when the set of scored names changes: the lab then rebuilds itself from history in one go
+
+
 def load_state():
     try:
         s = json.load(open(STATE))
+        if s.get("version") != LAB_VERSION:
+            raise ValueError("older lab format, rebuilding from history with the new composites")
         s.setdefault("marks", {})
         s.setdefault("moments", {})
         s.setdefault("agg", {})
         s.setdefault("scored", 0)
         return s
-    except Exception:
-        return {"marks": {}, "moments": {}, "agg": {}, "scored": 0}
+    except Exception as e:
+        if os.path.exists(STATE):
+            print(f"lab: {e}")
+        try:
+            os.remove(ROWS_CSV)                       # raw rows from the old format would not line up
+        except OSError:
+            pass
+        return {"marks": {}, "moments": {}, "agg": {}, "scored": 0, "version": LAB_VERSION}
 
 
 def merge_rows(new_rows, names):
@@ -661,6 +708,7 @@ def run():
     started = time.time()
     os.makedirs(DOCS, exist_ok=True)
     state = load_state()
+    state.setdefault("forward_start", int(time.time() * 1000))     # candles that close after this moment are out-of-sample
     coins = top_swaps(TOP_N)
     if not coins:
         print("lab: could not load the coin list, nothing done")
@@ -696,7 +744,7 @@ def run():
         if len(idx) == 0:
             continue
         move, race = score_outcomes(d, atr, idx)
-        add_to_agg(state["agg"], tf, votes, idx, move, race)
+        add_to_agg(state["agg"], tf, votes, idx, move, race, fwd=t0[idx] >= state["forward_start"])
         tm = t0[idx] // 60000
         lo, hi = int(tm.min()), int(tm.max())
         cur = state["moments"].get(tf)
