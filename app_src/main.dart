@@ -12,12 +12,6 @@ import 'dart:math' as math;
 
 const feedUrl = String.fromEnvironment('FEED_URL');
 
-/// Lab files live on their own branch (lab-data) so the repo history does not grow every 15 minutes.
-String labUrl(String name) {
-  final m = RegExp(r'^(https://raw\.githubusercontent\.com/[^/]+/[^/]+)/[^/]+/docs/feed\.json').firstMatch(feedUrl);
-  return m == null ? '' : '${m.group(1)}/lab-data/$name';
-}
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const SignalApp());
@@ -685,8 +679,12 @@ Analysis analyze(List<Candle> cs, int d) {
     info.add(Reading('Pivot / R1 / S1', '${f(p)} / ${f(2 * p - l[n - 2])} / ${f(2 * p - h[n - 2])}', 0));
   }
 
+  // Mean-reversion votes (RSI, MFI, Bollinger %B, CCI, Stochastic, Williams %R, Stochastic RSI, Ultimate Oscillator and
+  // the support/resistance position) were right LESS often than a coin flip in the one-month server Lab: -2 to -5 points
+  // in every style and in the forward test. They stay visible (marked "info only") but no longer count towards the verdict.
   var b = 0, s = 0, z = 0;
   for (final r in [...ma, ...osc]) {
+    if (r.mr) continue;
     if (r.sig > 0) {
       b++;
     } else if (r.sig < 0) {
@@ -695,17 +693,14 @@ Analysis analyze(List<Candle> cs, int d) {
       z++;
     }
   }
-  // regime-aware score: trust trend indicators in strong trends, oscillators in ranges
+  // Weights follow the server Lab: the indicators with the clearest edge count more, candle patterns (no edge) count less.
+  const edgeWeight = <String, double>{
+    'Keltner channel (20,2)': 2.0, 'Donchian break (20)': 2.0, 'ADX (14)': 1.5, 'Ichimoku': 1.5, 'SMA 50': 1.5, 'Candle pattern': 0.5,
+  };
   var wsum = 0.0, ssum = 0.0;
   for (final r in [...ma, ...osc]) {
-    var w = 1.0;
-    if (!adxV.isNaN) {
-      if (adxV > 25) {
-        w = r.mr ? 0.5 : 1.5;
-      } else if (adxV < 20) {
-        w = r.mr ? 1.3 : 0.6;
-      }
-    }
+    if (r.mr) continue;
+    final w = edgeWeight[r.name] ?? 1.0;
     wsum += w;
     ssum += w * r.sig;
   }
@@ -1024,7 +1019,6 @@ class AppTrade {
   final double entry, sl, tp, score, riskCash;
   final double? adx, atrPct, rvol, ext;
   final int quality, htfAgree, btc;
-  final bool be;                  // move the stop to entry after the trade gains 1R
   final DateTime opened;
   String status = 'open', reason = '';
   double mfe = 0, mae = 0, exitPx = 0, r = 0;
@@ -1035,7 +1029,7 @@ class AppTrade {
       required this.side, required this.buys, required this.sells, required this.neutrals, required this.mood,
       required this.entry, required this.sl, required this.tp, required this.score, required this.riskCash,
       required this.adx, required this.atrPct, required this.opened,
-      this.rvol, this.ext, this.quality = 0, this.htfAgree = 0, this.btc = 0, this.be = false});
+      this.rvol, this.ext, this.quality = 0, this.htfAgree = 0, this.btc = 0});
 
   bool get isOpen => status == 'open';
   double get riskPx => (entry - sl).abs();
@@ -1048,7 +1042,7 @@ class AppTrade {
         'risk': riskCash, 'adx': cleanNum(adx), 'atrPct': cleanNum(atrPct), 'opened': opened.toIso8601String(),
         'status': status, 'reason': reason, 'mfe': mfe, 'mae': mae, 'exit': exitPx, 'r': r, 'amb': ambiguous,
         'closed': closed?.toIso8601String(),
-        'rvol': cleanNum(rvol), 'ext': cleanNum(ext), 'q': quality, 'htf': htfAgree, 'btc': btc, 'be': be,
+        'rvol': cleanNum(rvol), 'ext': cleanNum(ext), 'q': quality, 'htf': htfAgree, 'btc': btc,
       };
 
   factory AppTrade.fromJson(Map<String, dynamic> j) {
@@ -1060,7 +1054,7 @@ class AppTrade {
       score: num0(j['score']), riskCash: num0(j['risk']), adx: (j['adx'] as num?)?.toDouble(),
       atrPct: (j['atrPct'] as num?)?.toDouble(), opened: DateTime.tryParse('${j['opened']}') ?? DateTime.now(),
       rvol: (j['rvol'] as num?)?.toDouble(), ext: (j['ext'] as num?)?.toDouble(), quality: (j['q'] as num?)?.toInt() ?? 0,
-      htfAgree: (j['htf'] as num?)?.toInt() ?? 0, btc: (j['btc'] as num?)?.toInt() ?? 0, be: j['be'] == true,
+      htfAgree: (j['htf'] as num?)?.toInt() ?? 0, btc: (j['btc'] as num?)?.toInt() ?? 0,
     );
     t.status = '${j['status'] ?? 'open'}';
     t.reason = '${j['reason'] ?? ''}';
@@ -1074,12 +1068,10 @@ class AppTrade {
   }
 }
 
-/// Walks candles after the entry candle. Same-candle SL and TP counts as SL (pessimistic).
-/// With break-even on, the stop moves to entry from the candle AFTER price first gains 1R. Returns true if closed.
+/// Walks candles after the entry candle. Same-candle SL and TP counts as SL (pessimistic). Returns true if closed.
 bool settleTrade(AppTrade t, List<Candle> cs) {
   final risk = t.riskPx == 0 ? 1e-12 : t.riskPx;
   var mfe = t.mfe, mae = t.mae;
-  var stop = t.sl, armed = false;
   double? exitPx;
   var reason = '', amb = false;
   DateTime? when;
@@ -1089,19 +1081,15 @@ bool settleTrade(AppTrade t, List<Candle> cs) {
     final adv = t.side == 1 ? t.entry - c.low : c.high - t.entry;
     mfe = math.max(mfe, fav / risk);
     mae = math.max(mae, adv / risk);
-    final hitSl = t.side == 1 ? c.low <= stop : c.high >= stop;
+    final hitSl = t.side == 1 ? c.low <= t.sl : c.high >= t.sl;
     final hitTp = t.side == 1 ? c.high >= t.tp : c.low <= t.tp;
     if (hitSl) {
-      exitPx = stop; reason = armed ? 'BE' : 'SL'; when = c.time; amb = hitTp;
+      exitPx = t.sl; reason = 'SL'; when = c.time; amb = hitTp;
       break;
     }
     if (hitTp) {
       exitPx = t.tp; reason = 'TP'; when = c.time;
       break;
-    }
-    if (t.be && !armed && fav / risk >= 1) {
-      armed = true;
-      stop = t.entry;
     }
   }
   t.mfe = mfe;
@@ -1121,7 +1109,7 @@ bool settleTrade(AppTrade t, List<Candle> cs) {
 }
 
 class PStats {
-  int n = 0, wins = 0, tp = 0, sl = 0, timeouts = 0, be = 0;
+  int n = 0, wins = 0, tp = 0, sl = 0, timeouts = 0;
   double sumR = 0, grossWin = 0, grossLoss = 0;
   PStats(Iterable<AppTrade> list) {
     for (final t in list.where((x) => !x.isOpen)) {
@@ -1131,7 +1119,6 @@ class PStats {
       if (t.reason == 'TP') tp++;
       if (t.reason == 'SL') sl++;
       if (t.reason == 'TIMEOUT') timeouts++;
-      if (t.reason == 'BE') be++;
     }
   }
   double get winPct => n == 0 ? 0 : 100.0 * wins / n;
@@ -1149,7 +1136,7 @@ String tradesToCsv(List<AppTrade> trades) {
   const cols = ['id', 'status', 'opened_utc', 'closed_utc', 'hours_held', 'symbol', 'strategy', 'tf', 'side', 'verdict', 'score',
     'entry', 'sl', 'tp', 'risk_pct', 'planned_rr', 'exit_price', 'exit_reason', 'same_candle_sl_tp', 'r_multiple', 'pnl_usd',
     'mfe_r', 'mae_r', 'buys', 'neutrals', 'sells', 'adx', 'atr_pct', 'news_mood', 'hour_utc', 'weekday',
-    'quality', 'htf_agree', 'rvol', 'ext_atr', 'btc_regime', 'be_stop'];
+    'quality', 'htf_agree', 'rvol', 'ext_atr', 'btc_regime'];
   String r(double? v, int n) => v == null ? '' : v.toStringAsFixed(n);
   final out = StringBuffer(cols.join(',')).toString();
   final lines = <String>[out];
@@ -1163,7 +1150,7 @@ String tradesToCsv(List<AppTrade> trades) {
       t.entry, t.sl, t.tp, r(t.entry == 0 ? null : t.riskPx / t.entry * 100, 3), r(t.plannedRr, 2),
       done ? t.exitPx : '', done ? t.reason : '', done ? t.ambiguous : '', done ? r(t.r, 3) : '', done ? r(t.pnl, 2) : '',
       r(t.mfe, 2), r(t.mae, 2), t.buys, t.neutrals, t.sells, r(t.adx, 1), r(t.atrPct, 3), t.mood, u.hour, u.weekday,
-      t.quality, t.htfAgree, r(t.rvol, 2), r(t.ext, 2), t.btc, t.be,
+      t.quality, t.htfAgree, r(t.rvol, 2), r(t.ext, 2), t.btc,
     ];
     lines.add(row.map(csvCell).join(','));
   }
@@ -1205,7 +1192,7 @@ String categoryOf(String n) {
   const vol = ['VWAP', 'VWMA', 'MFI', 'OBV', 'Chaikin', 'Last closed candle volume'];
   const brk = ['Bollinger', 'Donchian', 'Keltner', 'Squeeze'];
   const sr = ['Support', 'Fib', 'Pivot'];
-  if (n.startsWith('OVERALL') || n.startsWith('COMPOSITE')) return 'Overall verdict';
+  if (n.startsWith('OVERALL')) return 'Overall verdict';
   if (n.startsWith('Candle pattern')) return 'Candle patterns';
   if (vol.any(n.startsWith)) return 'Volume';
   if (brk.any(n.startsWith)) return 'Breakout / volatility';
@@ -1258,20 +1245,12 @@ int evalSnap(LabSnap s, List<Candle> cs) {
   return 1;
 }
 
-/// aggregate row: [n, directionHits, raceWins, raceLosses, sumSignedMoveAtr, decidedBuys, decidedSells, buyVotes]
-/// the '__BASE__|style' row holds the market itself: [snapshots, upFirst, downFirst, movedUp, 0, 0, 0, 0]
+/// aggregate row: [n, directionHits, raceWins, raceLosses, sumSignedMoveAtr]
 void labAdd(Map<String, List<double>> agg, LabSnap s) {
   final style = styleOf(s.tf);
-  for (final key in ['__BASE__|$style', '__BASE__|All']) {
-    final b = agg.putIfAbsent(key, () => List<double>.filled(8, 0));
-    b[0]++;
-    if (s.race == 1) b[1]++;
-    if (s.race == -1) b[2]++;
-    if (s.move > 0) b[3]++;
-  }
   s.votes.forEach((name, sig) {
     for (final key in ['$name|$style', '$name|All']) {
-      final a = agg.putIfAbsent(key, () => List<double>.filled(8, 0));
+      final a = agg.putIfAbsent(key, () => [0, 0, 0, 0, 0]);
       a[0]++;
       if (s.move * sig > 0) a[1]++;
       if (s.race == sig) {
@@ -1280,53 +1259,19 @@ void labAdd(Map<String, List<double>> agg, LabSnap s) {
         a[3]++;
       }
       a[4] += s.move * sig;
-      if (s.race != 0) {
-        if (sig == 1) { a[5]++; } else { a[6]++; }
-      }
-      if (sig == 1) a[7]++;
     }
   });
 }
 
-class LabM {
-  final double winPct, basePct, excessPts, z, dirPct, dirBasePct;
-  LabM(this.winPct, this.basePct, this.excessPts, this.z, this.dirPct, this.dirBasePct);
-}
-
-/// Compares an indicator with a random mix of buys and sells that faced the same market.
-/// A trend-following indicator "wins" on a falling day just by being bearish, so only the excess over this baseline counts.
-LabM? labM(List<double> a, List<double>? b) {
-  if (b == null || a.length < 8 || b.length < 8) return null;
-  final dec = b[1] + b[2];
-  if (dec == 0 || a[0] == 0) return null;
-  final pUp = b[1] / dec;
-  final decided = a[5] + a[6];
-  if (decided == 0) return null;
-  final exp = a[5] * pUp + a[6] * (1 - pUp);
-  final varr = decided * pUp * (1 - pUp);
-  final pMoveUp = b[3] / b[0];
-  final dirExp = a[7] * pMoveUp + (a[0] - a[7]) * (1 - pMoveUp);
-  return LabM(100 * a[2] / decided, 100 * exp / decided, 100 * (a[2] - exp) / decided, varr > 0 ? (a[2] - exp) / math.sqrt(varr) : 0,
-      100 * a[1] / a[0], 100 * dirExp / a[0]);
-}
-
 String labAggCsv(Map<String, List<double>> agg) {
-  final lines = ['indicator,category,style,signals,direction_accuracy_pct,direction_expected_pct,race_wins,race_losses,race_win_pct,race_expected_pct,excess_pts,z_if_independent,avg_move_atr'];
-  final keys = agg.keys.where((k) => !k.startsWith('__BASE__')).toList()..sort();
+  final lines = ['indicator,category,style,signals,direction_accuracy_pct,race_wins,race_losses,race_win_pct,avg_move_atr'];
+  final keys = agg.keys.toList()..sort();
   for (final k in keys) {
     final a = agg[k]!, i = k.lastIndexOf('|');
     final name = k.substring(0, i), style = k.substring(i + 1);
     final den = a[2] + a[3];
-    final m = labM(a, agg['__BASE__|$style']);
-    lines.add([csvCell(name), csvCell(categoryOf(name)), style, a[0].toInt(), (100 * a[1] / a[0]).toStringAsFixed(1),
-      m == null ? '' : m.dirBasePct.toStringAsFixed(1), a[2].toInt(), a[3].toInt(), den > 0 ? (100 * a[2] / den).toStringAsFixed(1) : '',
-      m == null ? '' : m.basePct.toStringAsFixed(1), m == null ? '' : m.excessPts.toStringAsFixed(1), m == null ? '' : m.z.toStringAsFixed(2),
-      (a[4] / a[0]).toStringAsFixed(3)].join(','));
-  }
-  final marks = agg.keys.where((k) => k.startsWith('__BASE__')).toList()..sort();
-  for (final k in marks) {
-    final b = agg[k]!;
-    lines.add('MARKET (all coins),Market,${k.substring(k.lastIndexOf('|') + 1)},${b[0].toInt()},${(100 * b[3] / b[0]).toStringAsFixed(1)} up,,${b[1].toInt()} up first,${b[2].toInt()} down first,,,,,');
+    lines.add([csvCell(name), csvCell(categoryOf(name)), style, a[0].toInt(), (100 * a[1] / a[0]).toStringAsFixed(1), a[2].toInt(), a[3].toInt(),
+      den > 0 ? (100 * a[2] / den).toStringAsFixed(1) : '', (a[4] / a[0]).toStringAsFixed(3)].join(','));
   }
   return lines.join('\n') + '\n';
 }
@@ -1413,8 +1358,8 @@ class _HomeState extends State<Home> {
   List<AppTrade> trades = [];
   bool autoPaper = false, paperBusy = false;
   double paperMinScore = 0.35;
-  int paperMaxOpen = 40, paperMinQ = 3, paperRejected = 0, paperCoins = 100, paperBe = 2;   // paperBe: 0 off, 1 on, 2 alternate (A/B test)
-  Set<String> paperTfs = {'5m', '15m', '30m', '1h', '4h', '1d'};
+  int paperMaxOpen = 40, paperMinQ = 3, paperRejected = 0, paperCoins = 100, paperMinAdx = 25;
+  Set<String> paperTfs = {'5m', '15m', '1h', '4h', '1d'};
   bool paperScanBusy = false;
   final Map<String, int> paperLogged = {};     // coin|tf -> candle close already handled
   List<String> paperCoinList = [];
@@ -1432,17 +1377,7 @@ class _HomeState extends State<Home> {
   int labCoins = 20, labScored = 0;
   String labStyle = 'All', labCat = 'All', labStatus = '';
   DateTime? labUpdated;
-  Timer? labTimer, srvTimer;
-  // Signal Lab data collected by the server bot (runs 24/7, no app needed)
-  Map<String, List<double>> srvAgg = {};
-  Map<String, int> srvMoments = {};
-  String srvStatus = '';
-  DateTime? srvUpdated;
-  int srvScored = 0, srvPairs = 0, srvPairsTotal = 0;
-  List<String> srvCoins = [], srvTfs = [];
-  bool srvLoading = false;
-  bool? labPref;                                   // null = pick the server automatically when it has data
-  bool get labServer => labPref ?? srvAgg.isNotEmpty;
+  Timer? labTimer;
 
   @override
   void initState() {
@@ -1466,8 +1401,6 @@ class _HomeState extends State<Home> {
     });
     loadLab();
     labTimer = Timer.periodic(const Duration(seconds: 60), (_) => labCycle());
-    loadServerLab();
-    srvTimer = Timer.periodic(const Duration(minutes: 5), (_) => loadServerLab());
   }
 
   @override
@@ -1480,7 +1413,6 @@ class _HomeState extends State<Home> {
     alertTimer?.cancel();
     paperTimer?.cancel();
     labTimer?.cancel();
-    srvTimer?.cancel();
     super.dispose();
   }
 
@@ -1561,55 +1493,6 @@ class _HomeState extends State<Home> {
   // ---------- Signal Lab ----------
   List<String> get labTfs => [if (lab5m) '5m', '15m', '1h', '4h', '1d'];
 
-  Future<String?> fetchText(String url, {bool quiet = false}) async {
-    if (url.isEmpty) return null;
-    try {
-      final r = await http.get(Uri.parse('$url?t=${DateTime.now().millisecondsSinceEpoch}')).timeout(const Duration(seconds: 30));
-      if (r.statusCode != 200) {
-        if (!quiet) toast('Not available yet (HTTP ${r.statusCode}). The server writes it after its first Lab run.');
-        return null;
-      }
-      return utf8.decode(r.bodyBytes);
-    } catch (e) {
-      if (!quiet) toast('Could not download: $e');
-      return null;
-    }
-  }
-
-  Future<void> loadServerLab() async {
-    if (srvLoading) return;
-    srvLoading = true;
-    try {
-      final raw = await fetchText(labUrl('lab.json'), quiet: true);
-      if (raw == null) {
-        if (srvAgg.isEmpty) srvStatus = 'No server Lab data yet. It appears after the updated bot has run once (the first run backfills history).';
-      } else {
-        final j = jsonDecode(raw) as Map<String, dynamic>;
-        srvAgg = {for (final e in (j['agg'] as Map).entries) '${e.key}': (e.value as List).map((x) => (x as num).toDouble()).toList()};
-        srvMoments = {for (final e in (j['moments'] as Map).entries) '${e.key}': (e.value as num).toInt()};
-        srvStatus = '${j['status'] ?? ''}';
-        srvUpdated = DateTime.tryParse('${j['updated']}');
-        srvScored = (j['scored'] as num?)?.toInt() ?? 0;
-        srvPairs = (j['pairs_done'] as num?)?.toInt() ?? 0;
-        srvPairsTotal = (j['pairs_total'] as num?)?.toInt() ?? 0;
-        srvCoins = [for (final x in (j['coins'] as List? ?? [])) '$x'];
-        srvTfs = [for (final x in (j['tfs'] as List? ?? [])) '$x'];
-      }
-    } catch (e) {
-      srvStatus = 'Could not read the server Lab data: $e';
-    } finally {
-      srvLoading = false;
-      if (mounted) setState(() {});
-    }
-  }
-
-  Future<void> shareSrvFile(String file, String subject) async {
-    final t = await fetchText(labUrl(file));
-    if (t == null) return;
-    final f = await _writeTemp('server_$file', t);
-    if (f != null) await Share.shareXFiles([XFile(f.path, mimeType: 'text/csv')], subject: subject);
-  }
-
   Future<void> loadLab() async {
     try {
       final raw = await readStore('lab.json');
@@ -1623,12 +1506,6 @@ class _HomeState extends State<Home> {
         labPending = (j['pending'] as List).map((e) => LabSnap.fromJson(Map<String, dynamic>.from(e as Map))).toList();
         labRows = (j['rows'] as List).map((e) => LabSnap.fromJson(Map<String, dynamic>.from(e as Map))).toList();
         labLogged = {for (final e in (j['logged'] as Map).entries) '${e.key}': (e.value as num).toInt()};
-        if (labAgg.values.any((a) => a.length < 8)) {       // older save: rebuild with the market baseline from the raw rows
-          labAgg = {};
-          for (final r in labRows) {
-            labAdd(labAgg, r);
-          }
-        }
       }
       labLoaded = true;
     } catch (_) {
@@ -1804,10 +1681,16 @@ class _HomeState extends State<Home> {
       paperMinScore = p.getDouble('app_paper_min') ?? 0.35;
       paperMaxOpen = p.getInt('app_paper_max') ?? 40;
       paperCoins = p.getInt('app_paper_coins') ?? 100;
-      paperBe = p.getInt('app_paper_be') ?? 2;
       final tl = p.getStringList('app_paper_tfs');
       if (tl != null && tl.isNotEmpty) paperTfs = tl.toSet();
       paperMinQ = p.getInt('app_paper_q') ?? 3;
+      paperMinAdx = p.getInt('app_paper_adx') ?? 25;
+      if (!(p.getBool('app_paper_v2') ?? false)) {                 // one-time update: 30m lost the most in the paper results
+        paperTfs.remove('30m');
+        if (paperTfs.isEmpty) paperTfs = {'5m', '15m', '1h', '4h', '1d'};
+        await p.setBool('app_paper_v2', true);
+        await p.setStringList('app_paper_tfs', paperTfs.toList());
+      }
     } catch (_) {}
     paperLoaded = true;
     if (mounted) setState(() {});
@@ -1826,8 +1709,8 @@ class _HomeState extends State<Home> {
       await p.setDouble('app_paper_min', paperMinScore);
       await p.setInt('app_paper_max', paperMaxOpen);
       await p.setInt('app_paper_q', paperMinQ);
+      await p.setInt('app_paper_adx', paperMinAdx);
       await p.setInt('app_paper_coins', paperCoins);
-      await p.setInt('app_paper_be', paperBe);
       await p.setStringList('app_paper_tfs', paperTfs.toList());
     } catch (_) {}
   }
@@ -1838,6 +1721,7 @@ class _HomeState extends State<Home> {
     if (a.side == 0 || a.atr.isNaN || a.atr <= 0) return null;
     final plan = tradePlan(a);
     if (plan[2] < 1.2) return null;
+    if (a.atr / a.last * 100 > 8 || plan[0] <= 0 || plan[1] <= 0) return null;   // illiquid coins with absurd stops, or a target below zero
     if (trades.any((t) => t.isOpen && t.coin == coin && t.tf == tf)) return null;
     final id = trades.isEmpty ? 1 : trades.map((t) => t.id).reduce(math.max) + 1;
     final t = AppTrade(
@@ -1847,7 +1731,6 @@ class _HomeState extends State<Home> {
       atrPct: a.last == 0 ? null : cleanNum(a.atr / a.last * 100), opened: DateTime.now(),
       rvol: q?['rvol'] as double?, ext: q?['ext'] as double?, quality: (q?['q'] as int?) ?? 0,
       htfAgree: (q?['htf'] as int?) ?? 0, btc: (q?['btc'] as int?) ?? 0,
-      be: paperBe == 1 || (paperBe == 2 && id.isEven),
     );
     trades.add(t);
     return t;
@@ -1961,6 +1844,7 @@ class _HomeState extends State<Home> {
             paperLogged['${j[0]}|${j[1]}'] = t0;
             final ac = analyze(cs.sublist(0, cs.length - 1), 2);
             if (ac.side == 0 || ac.score.abs() < paperMinScore) return null;
+            if (paperMinAdx > 0 && !ac.adx.isNaN && ac.adx < paperMinAdx) return null;   // no trend, no edge in the Lab
             return {'coin': j[0], 'tf': j[1], 'cs': cs, 'ac': ac};
           } catch (_) {
             return null;
@@ -1970,7 +1854,7 @@ class _HomeState extends State<Home> {
         await Future.delayed(const Duration(milliseconds: 250));      // stay well inside the exchange rate limit
       }
       cands.sort((a, b) => (b['ac'] as Analysis).score.abs().compareTo((a['ac'] as Analysis).score.abs()));
-      var opened = 0, rejected = 0, qchecked = 0, crowded = 0;
+      var opened = 0, rejected = 0, qchecked = 0;
       for (final m in cands) {
         if (trades.where((t) => t.isOpen).length >= paperMaxOpen) break;
         final coin = m['coin'] as String, tf = m['tf'] as String;
@@ -1982,11 +1866,6 @@ class _HomeState extends State<Home> {
         final cooldown = trades.any((t) => !t.isOpen && t.coin == coin && t.tf == tf && t.closed != null &&
             DateTime.now().difference(t.closed!).inMinutes < holdH * 15);   // wait a quarter of the hold time after a close
         if (cooldown) continue;
-        // many coins move together, so 40 same-direction trades are really one bet: cap each direction at 60% of the limit
-        if (trades.where((t) => t.isOpen && t.side == ac.side).length >= (paperMaxOpen * 0.6).ceil()) {
-          crowded++;
-          continue;
-        }
         final live = analyze(cs, 2);                                   // entry price and plan come from the live candle
         if (live.side != ac.side) continue;
         Map<String, dynamic>? q;
@@ -2003,7 +1882,7 @@ class _HomeState extends State<Home> {
         if (openPaperTrade(coin, tf, live, 'auto', q) != null) opened++;
       }
       if (opened > 0) await savePaper();
-      paperStatus = 'Last check ${hhmm(DateTime.now())}: ${jobs.length} pairs, ${cands.length} signals, $opened opened, $rejected filtered out, $crowded skipped (too many already one way).';
+      paperStatus = 'Last check ${hhmm(DateTime.now())}: ${jobs.length} pairs, ${cands.length} signals, $opened opened, $rejected filtered out.';
     } catch (e) {
       paperStatus = 'Auto paper trading could not run: $e';
     } finally {
@@ -2096,14 +1975,6 @@ class _HomeState extends State<Home> {
       if (a != null) files.add(XFile(a.path, mimeType: 'text/csv'));
       final b = await _writeTemp('lab_signal_snapshots.csv', labRowsCsv(labRows));
       if (b != null) files.add(XFile(b.path, mimeType: 'text/csv'));
-    }
-    if (labServer) {
-      for (final n in ['lab_accuracy.csv', 'lab_snapshots.csv']) {
-        final t = await fetchText(labUrl(n), quiet: true);
-        if (t == null) continue;
-        final f = await _writeTemp('server_$n', t);
-        if (f != null) files.add(XFile(f.path, mimeType: 'text/csv'));
-      }
     }
     if (files.isEmpty) return toast('Nothing to share yet.');
     try {
@@ -2525,10 +2396,11 @@ class _HomeState extends State<Home> {
     if (rows.isEmpty) return const SizedBox.shrink();
     Color? col(int s) => s == 1 ? Colors.green : s == -1 ? Colors.red : null;
     String lab(int s) => s == 1 ? 'BUY' : s == -1 ? 'SELL' : 'NEUTRAL';
+    String tag(Reading r) => r.mr ? 'info only' : lab(r.sig);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(padding: const EdgeInsets.only(top: 10, bottom: 2), child: Text(title, style: const TextStyle(fontWeight: FontWeight.w700))),
       for (final r in rows)
-        _indicatorRow(r.name, title == 'Levels' ? r.value : '${r.value}  ${lab(r.sig)}', col(r.sig)),
+        _indicatorRow(r.name, title == 'Levels' ? r.value : '${r.value}  ${tag(r)}', r.mr ? null : col(r.sig)),
     ]);
   }
 
@@ -3113,6 +2985,11 @@ class _HomeState extends State<Home> {
               for (final o in const {'Any (0.2)': 0.2, 'Medium (0.35)': 0.35, 'Strong (0.5)': 0.5}.entries)
                 ChoiceChip(label: Text(o.key), selected: paperMinScore == o.value, onSelected: (_) { setState(() => paperMinScore = o.value); savePaper(); }),
             ]),
+            const Text('Minimum ADX (trend strength). The Lab found no edge below 20', style: TextStyle(fontSize: 12)),
+            Wrap(spacing: 8, children: [
+              for (final o in const {'Off': 0, '20': 20, '25': 25, '30': 30}.entries)
+                ChoiceChip(label: Text(o.key), selected: paperMinAdx == o.value, onSelected: (_) { setState(() => paperMinAdx = o.value); savePaper(); }),
+            ]),
             const Text('Quality filter (higher timeframes, Bitcoin trend, volume, closed-candle check)', style: TextStyle(fontSize: 12)),
             Wrap(spacing: 8, children: [
               for (final o in const {'Off': 0, '3 of 5': 3, '4 of 5': 4}.entries)
@@ -3123,11 +3000,6 @@ class _HomeState extends State<Home> {
             Wrap(spacing: 8, children: [
               for (final n in [20, 50, 100])
                 ChoiceChip(label: Text('$n'), selected: paperMaxOpen == n, onSelected: (_) { setState(() => paperMaxOpen = n); savePaper(); }),
-            ]),
-            const Text('Stop rule (break-even moves the stop to entry after +1R)', style: TextStyle(fontSize: 12)),
-            Wrap(spacing: 8, children: [
-              for (final o in const {'Fixed stop': 0, 'Break-even': 1, 'A/B test': 2}.entries)
-                ChoiceChip(label: Text(o.key), selected: paperBe == o.value, onSelected: (_) { setState(() => paperBe = o.value); savePaper(); }),
             ]),
             const SizedBox(height: 6),
             const Text('Stop and target come from the same trade plan shown in Markets. Trades also need at least 1.2 reward to risk, one open trade per coin and timeframe, and none open during a high-impact news window. Same-candle stop and target counts as a loss, and 0.05R is charged for fees.', style: TextStyle(fontSize: 11)),
@@ -3145,7 +3017,7 @@ class _HomeState extends State<Home> {
               const SizedBox(height: 6),
               Text('Accuracy: ${st.winPct.toStringAsFixed(0)}% win rate (${st.wins} of ${st.n})'),
               Text('Average ${sgn(st.avgR)}R per trade, profit factor ${st.pf.toStringAsFixed(2)}, total ${sgn(st.sumR, 1)}R'),
-              Text('Hit target ${st.tp}, hit stop ${st.sl}, break-even ${st.be}, timed out ${st.timeouts}', style: const TextStyle(fontSize: 12)),
+              Text('Hit target ${st.tp}, hit stop ${st.sl}, timed out ${st.timeouts}', style: const TextStyle(fontSize: 12)),
             ],
           ]),
         ),
@@ -3174,7 +3046,6 @@ class _HomeState extends State<Home> {
       if (st.n > 0) ...[
         group('By timeframe', by((t) => t.tf)),
         group('By trading style', by((t) => styleOf(t.tf))),
-        group('By stop rule', by((t) => t.be ? 'Break-even after 1R' : 'Fixed stop')),
         group('By direction', by((t) => t.side == 1 ? 'BUY' : 'SELL')),
         group('By signal strength', by((t) => t.score.abs() >= .5 ? 'Strong (0.5+)' : t.score.abs() >= .35 ? 'Medium (0.35-0.5)' : 'Weak (0.2-0.35)')),
         group('By quality score', by((t) => t.quality == 0 ? 'Unfiltered' : 'Quality ${t.quality} of 5')),
@@ -3216,196 +3087,101 @@ class _HomeState extends State<Home> {
   }
 
   Widget labTab() {
-    const styles = ['All', 'Forward', 'Scalping', 'Intraday', 'Swing', 'Position'];
+    const styles = ['All', 'Scalping', 'Intraday', 'Swing', 'Position'];
     const cats = ['All', 'Overall verdict', 'Trend', 'Momentum / oscillators', 'Volume', 'Breakout / volatility', 'Support / resistance', 'Candle patterns'];
-    const minN = 30, minMoments = 30;
-    final srv = labServer;
-    final aggSrc = srv ? srvAgg : labAgg;
-    // coins that signal at the same candle close move together and 6-candle windows overlap, so the real sample is distinct closes / 6
-    int nMoments;
-    if (srv) {
-      nMoments = srvMoments[labStyle] ?? 0;
-    } else {
-      final distinct = <int>{};
-      for (final r in labRows) {
-        if (labStyle == 'All' || styleOf(r.tf) == labStyle) distinct.add(r.t0.millisecondsSinceEpoch);
-      }
-      nMoments = (distinct.length / labHorizonBars).ceil();
-    }
-    final reliable = nMoments >= minMoments;
-    final base = aggSrc['__BASE__|$labStyle'];
+    const minN = 30;
+    // rows for the chosen style
     final entries = <MapEntry<String, List<double>>>[];
-    aggSrc.forEach((k, a) {
+    labAgg.forEach((k, a) {
       final i = k.lastIndexOf('|');
-      if (k.startsWith('__BASE__') || k.substring(i + 1) != labStyle) return;
+      if (k.substring(i + 1) != labStyle) return;
       final name = k.substring(0, i);
       if (labCat != 'All' && categoryOf(name) != labCat) return;
       entries.add(MapEntry(name, a));
     });
-    double score(MapEntry<String, List<double>> e) => e.value[0] < minN ? -99 : (labM(e.value, base)?.z ?? -98);
+    double? raceWin(List<double> a) => a[2] + a[3] > 0 ? a[2] / (a[2] + a[3]) : null;
+    double score(MapEntry<String, List<double>> e) => e.value[0] < minN ? -9 : (raceWin(e.value) ?? .5);
     entries.sort((a, b) => score(b).compareTo(score(a)));
+    // category summary (all indicators in a category pooled)
     final catSum = <String, List<double>>{};
-    aggSrc.forEach((k, a) {
+    labAgg.forEach((k, a) {
       final i = k.lastIndexOf('|');
-      if (k.startsWith('__BASE__') || k.substring(i + 1) != labStyle) return;
-      final t = catSum.putIfAbsent(categoryOf(k.substring(0, i)), () => List<double>.filled(8, 0));
-      for (var x = 0; x < 8 && x < a.length; x++) {
+      if (k.substring(i + 1) != labStyle) return;
+      final c = categoryOf(k.substring(0, i));
+      final t = catSum.putIfAbsent(c, () => [0, 0, 0, 0, 0]);
+      for (var x = 0; x < 5; x++) {
         t[x] += a[x];
       }
     });
-    final styleSum = <String, List<double>?>{for (final st in styles.skip(1)) st: aggSrc['OVERALL verdict|$st']};
-    Color zc(LabM? m, double n) => !reliable || n < minN || m == null ? Colors.grey : m.z >= 2 ? Colors.green : m.z <= -2 ? Colors.red : Colors.orange;
-    String edge(LabM? m) => m == null ? '-' : '${m.excessPts >= 0 ? '+' : ''}${m.excessPts.toStringAsFixed(0)} pts';
-    return RefreshIndicator(onRefresh: loadServerLab, child: ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(12), children: [
+    // style summary of the overall verdict
+    final styleSum = <String, List<double>?>{for (final st in styles.skip(1)) st: labAgg['OVERALL verdict|$st']};
+    Color wc(double? w, double n) => n < minN || w == null ? Colors.grey : w >= .55 ? Colors.green : w <= .45 ? Colors.red : Colors.orange;
+    String pct(double? w) => w == null ? '-' : '${(w * 100).toStringAsFixed(0)}%';
+    return ListView(physics: const AlwaysScrollableScrollPhysics(), padding: const EdgeInsets.all(12), children: [
       Card(
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('Signal Lab', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-            const SizedBox(height: 4),
-            const Text('Records what every indicator said at each candle close, then checks what price did over the next 6 candles. Race test: did price move 1.5 ATR your way before 1.5 ATR against you. Every score is compared with a random mix of buys and sells in the same market, so a falling day cannot make bearish indicators look smart.', style: TextStyle(fontSize: 12)),
-            const SizedBox(height: 8),
-            Wrap(spacing: 8, children: [
-              ChoiceChip(label: const Text('Server (24/7)'), selected: srv, onSelected: (_) => setState(() => labPref = true)),
-              ChoiceChip(label: const Text('This phone'), selected: !srv, onSelected: (_) => setState(() => labPref = false)),
+            Row(children: [
+              const Expanded(child: Text('Signal Lab', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
+              Switch(value: labOn, onChanged: setLabOn),
             ]),
-            if (srv) ...[
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(srvUpdated == null ? srvStatus : 'Updated ${ago(srvUpdated!.toIso8601String())}. $srvStatus', style: const TextStyle(fontSize: 11)),
-              ),
-              if (srvCoins.isNotEmpty)
-                Text('Following ${srvCoins.length} coins on ${srvTfs.join(', ')}. $srvScored signal sets scored, $srvPairs of $srvPairsTotal pairs started. Pull down to refresh.', style: const TextStyle(fontSize: 11)),
-              if (srvLoading) const Padding(padding: EdgeInsets.only(top: 6), child: LinearProgressIndicator()),
-            ] else ...[
-              Row(children: [
-                const Expanded(child: Text('Collect on this phone (only while the app is open)', style: TextStyle(fontSize: 12))),
-                Switch(value: labOn, onChanged: setLabOn),
-              ]),
-              const Text('Coins to follow', style: TextStyle(fontSize: 12)),
-              Wrap(spacing: 8, children: [
-                for (final n in [10, 20, 40])
-                  ChoiceChip(label: Text('Top $n'), selected: labCoins == n, onSelected: (_) { setState(() => labCoins = n); saveLab(); }),
-                FilterChip(label: const Text('Add 5m scalping'), selected: lab5m, onSelected: (v) { setState(() => lab5m = v); saveLab(); }),
-              ]),
-              if (labStatus.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 6), child: Text(labStatus, style: const TextStyle(fontSize: 11))),
-              if (labBusy) const Padding(padding: EdgeInsets.only(top: 6), child: LinearProgressIndicator()),
-            ],
+            const Text('Records what every indicator said on the top coins at each candle close (15m, 1h, 4h, 1d), then checks what price did over the next 6 candles. Race test: did price move 1.5 ATR your way before 1.5 ATR against you. About 50% is a coin flip, so only results well away from 50% with 30+ signals mean anything.', style: TextStyle(fontSize: 12)),
+            const SizedBox(height: 6),
+            const Text('Coins to follow', style: TextStyle(fontSize: 12)),
+            Wrap(spacing: 8, children: [
+              for (final n in [10, 20, 40])
+                ChoiceChip(label: Text('Top $n'), selected: labCoins == n, onSelected: (_) { setState(() => labCoins = n); saveLab(); }),
+              FilterChip(label: const Text('Add 5m scalping'), selected: lab5m, onSelected: (v) { setState(() => lab5m = v); saveLab(); }),
+            ]),
+            if (labStatus.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 6), child: Text(labStatus, style: const TextStyle(fontSize: 11))),
+            if (labBusy) const Padding(padding: EdgeInsets.only(top: 6), child: LinearProgressIndicator()),
           ]),
         ),
       ),
-      Card(
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Builder(builder: (_) {
-            final placed = trades.toList()..sort((a, b) => b.opened.compareTo(a.opened));
-            String sg(double v) => '${v >= 0 ? '+' : ''}${v.toStringAsFixed(2)}';
-            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Trades placed', style: TextStyle(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 2),
-              if (placed.isEmpty)
-                const Text('No paper trades yet. Turn on Auto paper trading in the Paper tab and they will appear here, next to what the Lab measured for the same timeframe style.', style: TextStyle(fontSize: 12))
-              else ...[
-                const Text('Paper trades by style, next to the Lab result for the overall verdict on the same style.', style: TextStyle(fontSize: 12)),
-                const SizedBox(height: 4),
-                for (final st in const ['Scalping', 'Intraday', 'Swing', 'Position'])
-                  Builder(builder: (_) {
-                    final tt = placed.where((t) => styleOf(t.tf) == st).toList();
-                    if (tt.isEmpty) return const SizedBox.shrink();
-                    final ps = PStats(tt);
-                    final m = aggSrc['OVERALL verdict|$st'] == null ? null : labM(aggSrc['OVERALL verdict|$st']!, aggSrc['__BASE__|$st']);
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 3),
-                      child: Text('$st: ${tt.length} placed (${tt.where((t) => t.isOpen).length} open), ${ps.n == 0 ? 'none closed yet' : 'wins ${ps.winPct.toStringAsFixed(0)}%, ${sg(ps.avgR)}R average'}.  Lab verdict: ${m == null ? 'collecting' : '${m.winPct.toStringAsFixed(0)}% vs ${m.basePct.toStringAsFixed(0)}% expected'}',
-                          style: const TextStyle(fontSize: 12)),
-                    );
-                  }),
-                const Padding(padding: EdgeInsets.fromLTRB(0, 10, 0, 2), child: Text('Latest trades', style: TextStyle(fontWeight: FontWeight.w600))),
-                for (final t in placed.take(15))
-                  ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    title: Text('${t.coin} ${t.side == 1 ? 'BUY' : 'SELL'}  ${t.tf} (${styleOf(t.tf)})', style: TextStyle(fontWeight: FontWeight.w600, color: t.side == 1 ? Colors.green : Colors.red)),
-                    subtitle: Text('Placed ${ago(t.opened.toIso8601String())} at ${fmtPrice(t.entry)}  SL ${fmtPrice(t.sl)}  TP ${fmtPrice(t.tp)}\n${t.isOpen ? 'Open' : 'Closed by ${t.reason}'}, quality ${t.quality}/5, ${t.verdict}'),
-                    isThreeLine: true,
-                    trailing: Text(t.isOpen ? 'open' : '${sg(t.r)} R', style: TextStyle(fontWeight: FontWeight.w600, color: t.isOpen ? Colors.grey : (t.r >= 0 ? Colors.green : Colors.red))),
-                  ),
-                if (placed.length > 15) Text('Showing the latest 15 of ${placed.length}. All of them are in the Paper tab and its CSV.', style: const TextStyle(fontSize: 11)),
-              ],
-            ]);
-          }),
-        ),
-      ),
-      if (aggSrc.isEmpty)
-        Padding(padding: const EdgeInsets.all(24), child: Text(srv ? 'No server data yet. The bot writes it on its next run after you add the new lab.py and workflow (the first run backfills history, so results appear at once). Pull down to refresh.' : 'No scored signals yet. Turn collecting on and keep the app open. The first results arrive about 90 minutes later (6 candles on 15m), 6 hours for 1h, a day for 4h and 6 days for 1d.', textAlign: TextAlign.center))
+      if (labAgg.isEmpty)
+        const Padding(padding: EdgeInsets.all(24), child: Text('No scored signals yet. Turn the Lab on and keep the app open. The first results arrive about 90 minutes later (6 candles on 15m), 6 hours for 1h, a day for 4h and 6 days for 1d. Everything is saved on the phone between sessions.', textAlign: TextAlign.center))
       else ...[
         Card(
-          color: reliable ? null : Colors.orange.withOpacity(.12),
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(reliable ? 'Sample: about $nMoments independent windows' : 'Too early to trust: only about $nMoments independent windows (need $minMoments+)', style: const TextStyle(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 2),
-              Text(reliable
-                  ? 'Colors show indicators clearly better (green) or worse (red) than a random mix of buys and sells.'
-                  : 'Coins that signal at the same close move together and neighbouring candles overlap, so thousands of signals can still be only a few independent windows. Rankings stay grey until there are enough, and ideally data from both rising and falling markets.', style: const TextStyle(fontSize: 12)),
-              if (base != null && base[1] + base[2] > 0)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text('Market drift in this sample (${labStyle}): price hit -1.5 ATR first in ${(100 * base[2] / (base[1] + base[2])).toStringAsFixed(0)}% of decided races, and moved down in ${(100 * (1 - base[3] / base[0])).toStringAsFixed(0)}% of cases.', style: const TextStyle(fontSize: 12)),
-                ),
-            ]),
-          ),
-        ),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Trading styles: overall verdict', style: TextStyle(fontWeight: FontWeight.w700)),
+              const Text('Trading styles: overall verdict accuracy', style: TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 4),
               for (final e in styleSum.entries)
-                Builder(builder: (_) {
-                  final m = e.value == null ? null : labM(e.value!, aggSrc['__BASE__|${e.key}']);
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 3),
-                    child: e.value == null || m == null
-                        ? Text('${e.key}: collecting', style: const TextStyle(fontSize: 12))
-                        : Text('${e.key}: ${e.value![0].toInt()} signals, wins ${m.winPct.toStringAsFixed(0)}% vs ${m.basePct.toStringAsFixed(0)}% expected (${edge(m)})',
-                            style: TextStyle(fontSize: 12, color: zc(m, e.value![0]))),
-                  );
-                }),
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: e.value == null
+                      ? Text('${e.key}: collecting', style: const TextStyle(fontSize: 12))
+                      : Text('${e.key}: ${e.value![0].toInt()} signals, race win ${pct(raceWin(e.value!))}, direction right ${(100 * e.value![1] / e.value![0]).toStringAsFixed(0)}%, avg ${(e.value![4] / e.value![0]).toStringAsFixed(2)} ATR',
+                          style: TextStyle(fontSize: 12, color: wc(raceWin(e.value!), e.value![0]))),
+                ),
               const SizedBox(height: 4),
-              const Text('Scalping = 15m (and 5m if added), Intraday = 1h, Swing = 4h, Position = 1d. Forward = only candles that closed after the composite rules were fixed, so it is the fair out-of-sample test.', style: TextStyle(fontSize: 11)),
+              const Text('Scalping = 15m (and 5m if added), Intraday = 1h, Swing = 4h, Position = 1d.', style: TextStyle(fontSize: 11)),
             ]),
           ),
         ),
         Wrap(spacing: 8, children: [for (final x in styles) ChoiceChip(label: Text(x), selected: labStyle == x, onSelected: (_) => setState(() => labStyle = x))]),
         if (catSum.isNotEmpty) ...[
           const Padding(padding: EdgeInsets.fromLTRB(4, 12, 4, 2), child: Text('Indicator families (pooled)', style: TextStyle(fontWeight: FontWeight.w600))),
-          for (final e in (catSum.entries.toList()..sort((a, b) => (labM(b.value, base)?.z ?? -98).compareTo(labM(a.value, base)?.z ?? -98))))
-            Builder(builder: (_) {
-              final m = labM(e.value, base);
-              return ListTile(
-                dense: true,
-                title: Text(e.key),
-                subtitle: Text('${e.value[0].toInt()} signals${m == null ? '' : ', wins ${m.winPct.toStringAsFixed(0)}% vs ${m.basePct.toStringAsFixed(0)}% expected'}'),
-                trailing: Text(edge(m), style: TextStyle(fontWeight: FontWeight.w600, color: zc(m, e.value[0]))),
-              );
-            }),
+          for (final e in (catSum.entries.toList()..sort((a, b) => (raceWin(b.value) ?? 0).compareTo(raceWin(a.value) ?? 0))))
+            ListTile(
+              dense: true,
+              title: Text(e.key),
+              subtitle: Text('${e.value[0].toInt()} signals, direction right ${(100 * e.value[1] / e.value[0]).toStringAsFixed(0)}%'),
+              trailing: Text('race ${pct(raceWin(e.value))}', style: TextStyle(fontWeight: FontWeight.w600, color: wc(raceWin(e.value), e.value[0]))),
+            ),
         ],
-        const Padding(padding: EdgeInsets.fromLTRB(4, 12, 4, 2), child: Text('Every indicator, best edge first', style: TextStyle(fontWeight: FontWeight.w600))),
+        const Padding(padding: EdgeInsets.fromLTRB(4, 12, 4, 2), child: Text('Every indicator, best first', style: TextStyle(fontWeight: FontWeight.w600))),
         Wrap(spacing: 6, children: [for (final x in cats) ChoiceChip(label: Text(x, style: const TextStyle(fontSize: 11)), selected: labCat == x, onSelected: (_) => setState(() => labCat = x))]),
         if (entries.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('No data for this style yet.')),
         for (final e in entries.take(80))
-          Builder(builder: (_) {
-            final m = labM(e.value, base);
-            return ListTile(
-              dense: true,
-              title: Text(e.key),
-              subtitle: Text('${e.value[0].toInt()} signals${e.value[0] < minN ? ' (need $minN+)' : ''}${m == null ? '' : ', wins ${m.winPct.toStringAsFixed(0)}% vs ${m.basePct.toStringAsFixed(0)}% expected'}, avg ${(e.value[4] / e.value[0]).toStringAsFixed(2)} ATR'),
-              trailing: Text(edge(m), style: TextStyle(fontWeight: FontWeight.w600, color: zc(m, e.value[0]))),
-            );
-          }),
+          ListTile(
+            dense: true,
+            title: Text(e.key),
+            subtitle: Text('${e.value[0].toInt()} signals${e.value[0] < minN ? ' (need $minN+)' : ''}, direction right ${(100 * e.value[1] / e.value[0]).toStringAsFixed(0)}%, avg ${(e.value[4] / e.value[0]).toStringAsFixed(2)} ATR'),
+            trailing: Text('race ${pct(raceWin(e.value))}', style: TextStyle(fontWeight: FontWeight.w600, color: wc(raceWin(e.value), e.value[0]))),
+          ),
       ],
       Card(
         child: Padding(
@@ -3413,19 +3189,19 @@ class _HomeState extends State<Home> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Download Lab data', style: TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
-            const Text('Accuracy table: one row per indicator and style, with the expected score from market drift. Snapshots: the raw vote of every indicator at each signal with what happened next (last 1,500). Send these to tune the bot.', style: TextStyle(fontSize: 12)),
+            const Text('Accuracy table: one row per indicator and style. Snapshots: the raw vote of every indicator at each signal with what happened next (last 1,500). Send these to tune the bot.', style: TextStyle(fontSize: 12)),
             const SizedBox(height: 8),
             Wrap(spacing: 8, children: [
-              ElevatedButton.icon(onPressed: srv ? () => shareSrvFile('lab_accuracy.csv', 'Indicator accuracy (server)') : shareLabAcc, icon: const Icon(Icons.download), label: const Text('Accuracy table')),
-              OutlinedButton.icon(onPressed: srv ? () => shareSrvFile('lab_snapshots.csv', 'Signal snapshots (server)') : shareLabRows, icon: const Icon(Icons.table_chart), label: const Text('Raw snapshots')),
+              ElevatedButton.icon(onPressed: shareLabAcc, icon: const Icon(Icons.download), label: const Text('Accuracy table')),
+              OutlinedButton.icon(onPressed: shareLabRows, icon: const Icon(Icons.table_chart), label: const Text('Raw snapshots')),
               OutlinedButton.icon(onPressed: shareBothLogs, icon: const Icon(Icons.folder_zip), label: const Text('All logs')),
             ]),
-            if (!srv) Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: resetLab, icon: const Icon(Icons.delete_outline), label: const Text('Reset phone Lab'))),
+            Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: resetLab, icon: const Icon(Icons.delete_outline), label: const Text('Reset Lab'))),
           ]),
         ),
       ),
-      Padding(padding: const EdgeInsets.only(top: 8), child: Text(srv ? 'The server collects on its own, even when the app is closed. It backfills history on its first runs, so the sample can span rising and falling markets. Backfilled results use only data available at each candle, but they cover only coins that are top by volume today. Past results never guarantee future ones.' : 'Phone collecting only happens while the app is open. Past results never guarantee future ones, and an indicator can look good over a short window by luck.', style: TextStyle(fontSize: 11))),
-    ]));
+      const Padding(padding: EdgeInsets.only(top: 8), child: Text('Collecting only happens while the app is open. Past results never guarantee future ones, and an indicator can look good over a short window by luck. Trust it only with hundreds of signals.', style: TextStyle(fontSize: 11))),
+    ]);
   }
 
   Widget reportTab() {
