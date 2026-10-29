@@ -1324,6 +1324,7 @@ class _HomeState extends State<Home> {
   String marketInterval = '1m';
   String marketSignalFilter = 'All';
   String marketAdxOrder = 'Highest to lowest';
+  String marketScanUniverse = 'All markets';
   bool marketLoading = false;
   String? marketError;
   DateTime? marketUpdated;
@@ -2036,25 +2037,45 @@ class _HomeState extends State<Home> {
     if (scanning) return;
     setState(() { scanning = true; scanError = null; scanProgress = 0; });
     try {
-      if (futSymbols.isEmpty) await loadFutures();
-      if (futSymbols.isEmpty) throw futuresError ?? 'No futures coins loaded.';
-      final tickers = await fetchTickers();
-      movers = tickers;
-      final top = tickers.take(scanN).toList();
+      final tickers = <Map<String, dynamic>>[];
+      if (marketScanUniverse == 'Crypto' || marketScanUniverse == 'All markets') {
+        if (futSymbols.isEmpty) await loadFutures();
+        if (futSymbols.isNotEmpty) {
+          final crypto = await fetchTickers();
+          tickers.addAll(crypto.take(scanN));
+          movers = crypto;
+        } else if (marketScanUniverse == 'Crypto') {
+          throw futuresError ?? 'No crypto futures loaded.';
+        }
+      }
+      final nonCrypto = <String>[];
+      if (marketScanUniverse == 'Forex') {
+        nonCrypto.addAll(fxPairs);
+      } else if (marketScanUniverse == 'Gold & commodities') {
+        nonCrypto.addAll(['GOLD', 'SILVER', 'OIL']);
+      } else if (marketScanUniverse == 'All markets') {
+        nonCrypto.addAll(yahooPairs.keys);
+      }
+      for (final sym in nonCrypto) {
+        tickers.add({'coin': sym, 'price': 0.0, 'chg': 0.0, 'vol': 0.0});
+      }
+      if (tickers.isEmpty) throw 'No instruments available for this market selection.';
+      final top = tickers;
       final rows = <ScanRow>[];
-      for (var i = 0; i < top.length; i += 8) {
-        final batch = top.skip(i).take(8).toList();
+      for (var i = 0; i < top.length; i += 6) {
+        final batch = top.skip(i).take(6).toList();
         final res = await Future.wait(batch.map<Future<ScanRow?>>((t) async {
           try {
-            final cs = await fetchCandles(t['coin'] as String, scanTf);
+            final sym = t['coin'] as String;
+            final cs = await fetchCandles(sym, scanTf);
             if (cs.length < 35) return null;
-            return ScanRow(t['coin'] as String, cs.last.close, t['chg'] as double, t['vol'] as double, analyze(cs, 2));
+            return ScanRow(sym, cs.last.close, t['chg'] as double, t['vol'] as double, analyze(cs, decimalsFor(sym, cs.last.close)));
           } catch (_) {
             return null;
           }
         }));
         rows.addAll(res.whereType<ScanRow>());
-        if (mounted) setState(() => scanProgress = math.min(1.0, (i + 8) / top.length));
+        if (mounted) setState(() => scanProgress = math.min(1.0, (i + 6) / top.length));
       }
       scanRows = rows;
       scanUpdated = DateTime.now();
@@ -2402,8 +2423,13 @@ class _HomeState extends State<Home> {
       children: [
         Text('Market ADX & signal filters', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 4),
-        const Text('Scan coins on the selected market timeframe, then sort by ADX and filter the signal direction.', style: TextStyle(fontSize: 12)),
+        const Text('Scan crypto, forex pairs, gold, silver and oil on the selected timeframe, then sort by ADX and filter signals.', style: TextStyle(fontSize: 12)),
         const SizedBox(height: 10),
+        Wrap(spacing: 8, runSpacing: 6, children: [
+          for (final universe in ['All markets', 'Crypto', 'Forex', 'Gold & commodities'])
+            ChoiceChip(label: Text(universe), selected: marketScanUniverse == universe, onSelected: (_) => setState(() => marketScanUniverse = universe)),
+        ]),
+        const SizedBox(height: 8),
         Wrap(spacing: 8, runSpacing: 6, children: [
           for (final f in ['All', 'BUY', 'NEUTRAL', 'SELL', 'STRONG BUY', 'STRONG SELL'])
             ChoiceChip(label: Text(f), selected: marketSignalFilter == f, onSelected: (_) => setState(() => marketSignalFilter = f)),
@@ -2421,7 +2447,7 @@ class _HomeState extends State<Home> {
             label: Text(scanning ? 'Scanning...' : 'Scan market'),
           ),
           const SizedBox(width: 10),
-          Expanded(child: Text(scanUpdated == null ? 'No scan yet' : '${rows.length} results • ${scanTf} • ${ago(scanUpdated!.toIso8601String())}', style: const TextStyle(fontSize: 11))),
+          Expanded(child: Text(scanUpdated == null ? 'No scan yet' : '${rows.length} results • $marketScanUniverse • ${scanTf} • ${ago(scanUpdated!.toIso8601String())}', style: const TextStyle(fontSize: 11))),
         ]),
         if (scanning) LinearProgressIndicator(value: scanProgress == 0 ? null : scanProgress),
         if (scanError != null) Padding(padding: const EdgeInsets.only(top: 6), child: Text(scanError!, style: const TextStyle(color: Colors.orange, fontSize: 12))),
