@@ -33,7 +33,7 @@ def save(p):
     write_csv(p)
 
 def _row(t, status):
-    c = t.get("ctx") or {}
+    c = t.get("ctx", {})
     entry, sl = t.get("entry"), t.get("sl")
     risk_pct = abs(entry - sl) / entry * 100 if entry and sl is not None else None
     rr = abs(t["tp"] - entry) / abs(entry - sl) if entry and sl is not None and entry != sl and t.get("tp") is not None else None
@@ -70,32 +70,47 @@ def open_pos(p, symbol, s):
     p["open"].append({"id": p["next_id"], "symbol": symbol, "strategy": s["strategy"], "tf": s.get("tf"), "grade": s.get("grade"),
                       "side": s["side"], "entry": s["entry"], "sl": s["sl"], "tp": s["tp"], "units": risk_cash / risk,
                       "risk": risk_cash, "opened": pd.Timestamp.now(tz="UTC").isoformat(), "hold_h": s.get("hold_h", 72),
-                      "style": s.get("style"), "why": s.get("why"), "ctx": s.get("ctx") or {}, "mfe_r": 0.0, "mae_r": 0.0})
+                      "style": s.get("style"), "why": s.get("why"), "ctx": s.get("ctx", {}), "mfe_r": 0.0, "mae_r": 0.0})
 
 def update(p, rows_by_symbol):
-    """Close positions that hit SL/TP on 15m candles since entry, or timed out. Same-candle hits count as SL."""
+    """Update paper positions using closed candles from each position's own timeframe.
+
+    rows_by_symbol is {symbol: {timeframe: rows}} as produced by main.scan().
+    Older callers/data remain supported by falling back to a symbol-level row list.
+    If one candle touches both SL and TP, conservatively record the SL first.
+    """
     still, now = [], pd.Timestamp.now(tz="UTC")
     for o in p["open"]:
-        R, t0 = rows_by_symbol.get(o["symbol"]) or [], pd.Timestamp(o["opened"])
+        symbol_rows = rows_by_symbol.get(o["symbol"]) or []
+        if isinstance(symbol_rows, dict):
+            tf = o.get("tf") or "15m"
+            R = symbol_rows.get(tf) or []
+        else:  # backward compatibility for existing callers
+            R = symbol_rows
+        t0 = _utc(o["opened"])
+        # The final row is generally the currently-forming candle; do not use it
+        # to claim an SL/TP fill before that candle has closed.
+        closed_rows = R[:-1] if len(R) > 1 else []
         exit_px, reason, t_exit, ambiguous, mfe, mae = None, "", None, False, 0.0, 0.0
-        risk_px = abs(o["entry"] - o["sl"]) or 1e-12
-        for x in R:
-            if pd.Timestamp(x.Index) <= t0:
+        risk_px = abs(float(o["entry"]) - float(o["sl"])) or 1e-12
+        for x in closed_rows:
+            candle_time = _utc(x.Index)
+            if candle_time <= t0:
                 continue
-            fav = (x.high - o["entry"]) if o["side"] == 1 else (o["entry"] - x.low)
-            adv = (o["entry"] - x.low) if o["side"] == 1 else (x.high - o["entry"])
+            fav = (float(x.high) - o["entry"]) if o["side"] == 1 else (o["entry"] - float(x.low))
+            adv = (o["entry"] - float(x.low)) if o["side"] == 1 else (float(x.high) - o["entry"])
             mfe, mae = max(mfe, fav / risk_px), max(mae, adv / risk_px)
-            hit_sl = x.low <= o["sl"] if o["side"] == 1 else x.high >= o["sl"]
-            hit_tp = x.high >= o["tp"] if o["side"] == 1 else x.low <= o["tp"]
+            hit_sl = float(x.low) <= o["sl"] if o["side"] == 1 else float(x.high) >= o["sl"]
+            hit_tp = float(x.high) >= o["tp"] if o["side"] == 1 else float(x.low) <= o["tp"]
             if hit_sl:
-                exit_px, reason, t_exit, ambiguous = o["sl"], "SL", _utc(x.Index), bool(hit_tp)
+                exit_px, reason, t_exit, ambiguous = o["sl"], "SL", candle_time, bool(hit_tp)
                 break
             if hit_tp:
-                exit_px, reason, t_exit = o["tp"], "TP", _utc(x.Index)
+                exit_px, reason, t_exit = o["tp"], "TP", candle_time
                 break
         o["mfe_r"], o["mae_r"] = round(mfe, 2), round(mae, 2)
-        if exit_px is None and now - t0 > pd.Timedelta(hours=o["hold_h"]) and R:
-            exit_px, reason, t_exit = R[-1].close, "TIMEOUT", now
+        if exit_px is None and now - t0 > pd.Timedelta(hours=o.get("hold_h", 72)) and closed_rows:
+            exit_px, reason, t_exit = float(closed_rows[-1].close), "TIMEOUT", _utc(closed_rows[-1].Index)
         if exit_px is None:
             still.append(o)
             continue
@@ -116,8 +131,7 @@ def report(p):
         by.setdefault(t["strategy"], []).append(t["r"])
     for k, v in sorted(by.items(), key=lambda kv: -sum(kv[1])):
         lines.append(f"• {k}: {len(v)} trades, {100 * sum(r > 0 for r in v) / len(v):.0f}% wins, {sum(v):+.1f}R")
-    return "
-".join(lines)
+    return "\n".join(lines)
 
 def summary(p):
     by = {}

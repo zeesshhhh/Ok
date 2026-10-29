@@ -98,14 +98,23 @@ def scan():
         key = f"{name}|{sym}|{r.Index}{extra}"
         if (now - closed).total_seconds() / 60 > max_age or key in sent:
             return
-        live = float(R[-1].close)                       # latest price, not the old signal-bar close
-        risk = abs(float(r.close) - s["sl"])
-        move = (live - float(r.close)) * s["side"]      # + = price already ran our way, - = against
-        if move > 0.5 * risk or move < -0.5 * risk:     # chased or already failing: stale signal
+        live = float(R[-1].close)  # latest price; strategy levels were calculated from the signal candle close
+        side = int(s["side"])
+        risk = abs(float(r.close) - float(s["sl"]))
+        reward = abs(float(s["tp"]) - float(r.close))
+        if risk <= 0 or reward <= 0:
             return
-        if abs(s["tp"] - live) < 1.2 * abs(live - s["sl"]):   # reward/risk from the real entry too thin
+        move = (live - float(r.close)) * side  # + = price already ran our way, - = against
+        if move > 0.5 * risk or move < -0.5 * risk:  # chased or already failing: stale signal
             return
-        found.setdefault(sym, []).append({**s, "strategy": name, "tf": tf, "entry": live, "key": key,
+        # Re-anchor SL/TP to the actual intended entry while preserving the strategy's
+        # original price-risk and reward distances. This keeps paper-trade R consistent.
+        live_sl = live - side * risk
+        live_tp = live + side * reward
+        if (live_tp - live) * side < 1.2 * abs(live - live_sl):
+            return
+        found.setdefault(sym, []).append({**s, "strategy": name, "tf": tf, "entry": live,
+                                          "sl": float(live_sl), "tp": float(live_tp), "key": key,
                                           "hold_h": hold, "style": style,
                                           "grade": "proven" if name in PROVEN and sym in WATCHLIST else "experimental"})
 
@@ -145,7 +154,7 @@ def scan():
             found.setdefault(sym, []).append({**s, "strategy": "Momentum", "tf": "1d", "entry": float(r.close), "key": key,
                                               "hold_h": 720, "style": "weeks", "grade": "experimental"})
 
-    paper.update(ps, {s: r.get("15m") for s, r in rows.items()})
+    paper.update(ps, rows)
     for sym, sigs in found.items():
         asset = watch[sym]
         ev = news.near_high_impact(sym, events, NEWS_BLACKOUT_MIN)
