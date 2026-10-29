@@ -33,7 +33,7 @@ def save(p):
     write_csv(p)
 
 def _row(t, status):
-    c = t.get("ctx", {})
+    c = t.get("ctx") or {}
     entry, sl = t.get("entry"), t.get("sl")
     risk_pct = abs(entry - sl) / entry * 100 if entry and sl is not None else None
     rr = abs(t["tp"] - entry) / abs(entry - sl) if entry and sl is not None and entry != sl and t.get("tp") is not None else None
@@ -70,7 +70,7 @@ def open_pos(p, symbol, s):
     p["open"].append({"id": p["next_id"], "symbol": symbol, "strategy": s["strategy"], "tf": s.get("tf"), "grade": s.get("grade"),
                       "side": s["side"], "entry": s["entry"], "sl": s["sl"], "tp": s["tp"], "units": risk_cash / risk,
                       "risk": risk_cash, "opened": pd.Timestamp.now(tz="UTC").isoformat(), "hold_h": s.get("hold_h", 72),
-                      "style": s.get("style"), "why": s.get("why"), "ctx": s.get("ctx", {}), "mfe_r": 0.0, "mae_r": 0.0})
+                      "style": s.get("style"), "why": s.get("why"), "ctx": s.get("ctx") or {}, "mfe_r": 0.0, "mae_r": 0.0})
 
 def update(p, rows_by_symbol):
     """Close positions that hit SL/TP on 15m candles since entry, or timed out. Same-candle hits count as SL."""
@@ -116,7 +116,8 @@ def report(p):
         by.setdefault(t["strategy"], []).append(t["r"])
     for k, v in sorted(by.items(), key=lambda kv: -sum(kv[1])):
         lines.append(f"• {k}: {len(v)} trades, {100 * sum(r > 0 for r in v) / len(v):.0f}% wins, {sum(v):+.1f}R")
-    return "\n".join(lines)
+    return "
+".join(lines)
 
 def summary(p):
     by = {}
