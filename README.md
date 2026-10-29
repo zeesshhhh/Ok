@@ -42,6 +42,19 @@
 ## Crypto futures coins
 `FUTURES_TOP_N` in config.py (default 30) adds the top USDT perpetual coins by 24h volume, scanned with OKX data on 15m, 30m, 1H, 4H and 1D. They run every strategy but are always tagged experimental. Set it to 0 to switch off. Binance coins outside the top N are available in the app's Scanner tab only.
 
+## Optional trading-platform market-data connectors
+
+Choose one source for the Python signal engine with the environment variable `MARKET_DATA_PROVIDER` (one provider at a time):
+`yahoo` (default), `mt5`, `bybit`, `okx`, `oanda`, or `ibkr`. These connectors fetch candles for analysis; **they do not place, modify, or close live orders**. The Flutter app's direct market screen remains a separate data client.
+
+- **Bybit**: public market candles are supported without API credentials for supported crypto symbols. API docs: https://bybit-exchange.github.io/docs/v5/intro
+- **OKX**: public swap candles are supported without API credentials for supported crypto symbols. API docs: https://www.okx.com/docs-v5
+- **OANDA**: set `OANDA_API_TOKEN` and `OANDA_ENV=practice` (default) or `live`. Gold/silver and FX symbol availability depends on the account and region. API docs: https://developer.oanda.com/rest-live-v20/introduction/
+- **MetaTrader 5**: install the MT5 terminal and the official `MetaTrader5` Python package on a compatible Windows machine; optional `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER` environment variables can select an account. Broker symbol names differ, so update `MT5_SYMBOLS` in `broker_adapters.py` for suffixes such as `.a` or `m`.
+- **Interactive Brokers**: install `ib_insync`, run TWS or IB Gateway, and configure `IBKR_HOST`, `IBKR_PORT` (paper TWS commonly 7497), and `IBKR_CLIENT_ID`. IBKR requires market-data permissions; futures expiry/contract selection may need to be configured for your account. API docs: https://www.interactivebrokers.com/docs/
+
+Set secrets in your hosting environment/GitHub Actions, never commit credentials into the repository. Keep API keys read-only where possible. To test live order execution, build a separate explicit execution layer and start with each platform's demo/paper environment; this package does not trade live.
+
 ## Honest limits
 - True HFT needs colocated servers and microsecond latency. GitHub Actions cannot do it. The bot only reads order-book imbalance at scan time.
 - Arbitrage and copy trading are alerts. Fees, withdrawal time and USD-vs-USDT premiums often erase small spreads.

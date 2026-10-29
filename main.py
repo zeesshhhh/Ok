@@ -1,7 +1,8 @@
-import html, json, re, sys
+import html, json, re, sys, os
 import pandas as pd
 from config import *
 from data import get_ohlc, resample, okx_ohlc, okx_top_swaps
+from broker_adapters import get_provider_ohlc
 from signals import build
 from indicators import add_indicators
 from strategies import REGISTRY
@@ -22,7 +23,28 @@ def fmt(p):
     return f"{p:.5f}" if p >= 0.1 else f"{p:.8f}"
 
 def full_watchlist():
-    """Core watchlist plus the top crypto futures coins (OKX perpetuals)."""
+    """Select instruments compatible with the configured market-data provider."""
+    provider = os.getenv("MARKET_DATA_PROVIDER", "yahoo").strip().lower()
+    if provider in ("bybit", "okx"):
+        w = {s: "crypto" for s in ("BTC-USD", "ETH-USD", "SOL-USD")}
+        if provider == "okx" and FUTURES_TOP_N:
+            try:
+                for s in okx_top_swaps(FUTURES_TOP_N, FUTURES_EXCLUDE):
+                    w[s] = "crypto"
+            except Exception as e:
+                print("OKX futures list error", e)
+        return w
+    if provider == "oanda":
+        return {s: kind for s, kind in WATCHLIST.items()
+                if kind == "forex" or s in ("GC=F", "SI=F")}
+    if provider == "mt5":
+        return {s: kind for s, kind in WATCHLIST.items()
+                if s in ("EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X",
+                         "USDCHF=X", "GC=F", "SI=F", "BTC-USD")}
+    if provider in ("ibkr", "interactive_brokers"):
+        return {s: kind for s, kind in WATCHLIST.items()
+                if s in ("EURUSD=X", "GBPUSD=X", "USDJPY=X", "GC=F", "SI=F",
+                         "ES=F", "NQ=F", "CL=F")}
     w = dict(WATCHLIST)
     if FUTURES_TOP_N:
         try:
@@ -33,12 +55,11 @@ def full_watchlist():
     return w
 
 def load_rows(sym, tf, period):
-    if sym.endswith("-USDT"):                          # OKX futures coin: native bars, 4h included
+    provider = os.getenv("MARKET_DATA_PROVIDER", "yahoo").strip().lower()
+    if provider == "yahoo" and sym.endswith("-USDT"):   # existing OKX crypto-futures route
         df = okx_ohlc(sym, tf)
     else:
-        df = get_ohlc(sym, INTERVAL[tf], period)
-        if tf == "4h" and len(df):
-            df = resample(df, "4h")
+        df = get_provider_ohlc(sym, tf, period)
     if len(df) < (210 if tf == "1d" else 250):
         return None
     return list((build(df) if tf == "1h" else add_indicators(df)).itertuples())
