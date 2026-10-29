@@ -21,10 +21,34 @@ double num0(dynamic v) => (v as num?)?.toDouble() ?? 0;
 
 // Binance USDT-M perpetual futures: base coin -> contract symbol (filled from exchangeInfo, e.g. 'PEPE' -> '1000PEPEUSDT')
 final Map<String, String> futSymbols = {};
-const favorites = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'GOLD', 'SILVER', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'OIL'];
+const favorites = [
+  'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE',
+  'GOLD', 'SILVER', 'PLATINUM', 'PALLADIUM', 'COPPER', 'OIL', 'BRENT', 'NATGAS',
+  'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'NZDUSD', 'USDCAD', 'USDCHF',
+];
 const yahooPairs = {
-  'GOLD': 'GC=F', 'SILVER': 'XAGUSD=X', 'EURUSD': 'EURUSD=X', 'GBPUSD': 'GBPUSD=X',
-  'USDJPY': 'USDJPY=X', 'AUDUSD': 'AUDUSD=X', 'USDCAD': 'USDCAD=X', 'OIL': 'CL=F',
+  // Precious metals and energy
+  'GOLD': 'GC=F', 'SILVER': 'SI=F', 'PLATINUM': 'PL=F', 'PALLADIUM': 'PA=F',
+  'COPPER': 'HG=F', 'OIL': 'CL=F', 'BRENT': 'BZ=F', 'NATGAS': 'NG=F',
+  // Agricultural commodities
+  'CORN': 'ZC=F', 'WHEAT': 'ZW=F', 'SOYBEANS': 'ZS=F',
+  'COFFEE': 'KC=F', 'SUGAR': 'SB=F', 'COTTON': 'CT=F',
+  // Forex majors
+  'EURUSD': 'EURUSD=X', 'GBPUSD': 'GBPUSD=X', 'USDJPY': 'USDJPY=X',
+  'AUDUSD': 'AUDUSD=X', 'NZDUSD': 'NZDUSD=X', 'USDCAD': 'USDCAD=X', 'USDCHF': 'USDCHF=X',
+  // Common forex crosses
+  'EURGBP': 'EURGBP=X', 'EURJPY': 'EURJPY=X', 'EURCHF': 'EURCHF=X',
+  'EURCAD': 'EURCAD=X', 'EURAUD': 'EURAUD=X', 'EURNZD': 'EURNZD=X',
+  'GBPJPY': 'GBPJPY=X', 'GBPCHF': 'GBPCHF=X', 'GBPCAD': 'GBPCAD=X',
+  'GBPAUD': 'GBPAUD=X', 'GBPNZD': 'GBPNZD=X',
+  'AUDJPY': 'AUDJPY=X', 'AUDCAD': 'AUDCAD=X', 'AUDCHF': 'AUDCHF=X',
+  'AUDNZD': 'AUDNZD=X', 'NZDJPY': 'NZDJPY=X', 'NZDCAD': 'NZDCAD=X',
+  'NZDCHF': 'NZDCHF=X', 'CADJPY': 'CADJPY=X', 'CADCHF': 'CADCHF=X',
+  'CHFJPY': 'CHFJPY=X',
+};
+const commoditySymbols = {
+  'GOLD', 'SILVER', 'PLATINUM', 'PALLADIUM', 'COPPER', 'OIL', 'BRENT', 'NATGAS',
+  'CORN', 'WHEAT', 'SOYBEANS', 'COFFEE', 'SUGAR', 'COTTON',
 };
 const yahooTf = {
   '1m': ['1m', '5d'], '5m': ['5m', '5d'], '15m': ['15m', '1mo'], '30m': ['30m', '1mo'],
@@ -32,7 +56,13 @@ const yahooTf = {
 };
 const tfList = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
 const mtfList = ['5m', '15m', '30m', '1h', '4h', '1d'];
-const fxPairs = {'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD'};
+const fxPairs = {
+  'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'NZDUSD', 'USDCAD', 'USDCHF',
+  'EURGBP', 'EURJPY', 'EURCHF', 'EURCAD', 'EURAUD', 'EURNZD',
+  'GBPJPY', 'GBPCHF', 'GBPCAD', 'GBPAUD', 'GBPNZD',
+  'AUDJPY', 'AUDCAD', 'AUDCHF', 'AUDNZD', 'NZDJPY', 'NZDCAD',
+  'NZDCHF', 'CADJPY', 'CADCHF', 'CHFJPY',
+};
 int decimalsFor(String sym, double price) {
   if (yahooPairs.containsKey(sym)) return decimals(sym);
   if (price >= 1000) return 2;
@@ -2052,7 +2082,7 @@ class _HomeState extends State<Home> {
       if (marketScanUniverse == 'Forex') {
         nonCrypto.addAll(fxPairs);
       } else if (marketScanUniverse == 'Gold & commodities') {
-        nonCrypto.addAll(['GOLD', 'SILVER', 'OIL']);
+        nonCrypto.addAll(commoditySymbols);
       } else if (marketScanUniverse == 'All markets') {
         nonCrypto.addAll(yahooPairs.keys);
       }
@@ -2423,7 +2453,7 @@ class _HomeState extends State<Home> {
       children: [
         Text('Market ADX & signal filters', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 4),
-        const Text('Scan crypto, forex pairs, gold, silver and oil on the selected timeframe, then sort by ADX and filter signals.', style: TextStyle(fontSize: 12)),
+        const Text('Scan crypto, major/cross forex pairs, precious metals, energy and agricultural commodities on the selected timeframe; sort by ADX and filter signals.', style: TextStyle(fontSize: 12)),
         const SizedBox(height: 10),
         Wrap(spacing: 8, runSpacing: 6, children: [
           for (final universe in ['All markets', 'Crypto', 'Forex', 'Gold & commodities'])
