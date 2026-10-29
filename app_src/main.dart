@@ -1322,6 +1322,8 @@ class _HomeState extends State<Home> {
   Timer? marketTimer;
   String marketSymbol = 'BTC';
   String marketInterval = '1m';
+  String marketSignalFilter = 'All';
+  String marketAdxOrder = 'Highest to lowest';
   bool marketLoading = false;
   String? marketError;
   DateTime? marketUpdated;
@@ -2362,6 +2364,7 @@ class _HomeState extends State<Home> {
         if (an != null) _indicatorPanel(an) else const Text('More candles are needed to calculate indicators.'),
       ]))),
       _mtfCard(),
+      _marketSignalFilterCard(),
       Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text('Market sessions • Pakistan time (UTC+5)', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
@@ -2369,6 +2372,74 @@ class _HomeState extends State<Home> {
         const Text('Indicative session hours only; holidays and daylight-saving changes may affect hours. Crypto trades 24/7.', style: TextStyle(fontSize: 11)),
       ]))),
     ]));
+  }
+
+  Future<void> _runMarketScan() async {
+    final supported = {'5m', '15m', '30m', '1h', '4h', '1d'};
+    final tf = supported.contains(marketInterval) ? marketInterval : '5m';
+    setState(() {
+      scanTf = tf;
+      scanFilter = marketSignalFilter;
+    });
+    await runScan();
+  }
+
+  Widget _marketSignalFilterCard() {
+    final rows = scanRows.where((r) {
+      if (marketSignalFilter == 'BUY') return r.a.side == 1;
+      if (marketSignalFilter == 'SELL') return r.a.side == -1;
+      if (marketSignalFilter == 'NEUTRAL') return r.a.side == 0;
+      if (marketSignalFilter == 'STRONG BUY') return r.a.verdict == 'STRONG BUY';
+      if (marketSignalFilter == 'STRONG SELL') return r.a.verdict == 'STRONG SELL';
+      return true;
+    }).toList();
+    rows.sort((a, b) => marketAdxOrder == 'Lowest to highest'
+        ? a.a.adx.compareTo(b.a.adx)
+        : b.a.adx.compareTo(a.a.adx));
+    Color col(int side) => side == 1 ? Colors.green : side == -1 ? Colors.red : Colors.grey;
+    return Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Market ADX & signal filters', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 4),
+        const Text('Scan coins on the selected market timeframe, then sort by ADX and filter the signal direction.', style: TextStyle(fontSize: 12)),
+        const SizedBox(height: 10),
+        Wrap(spacing: 8, runSpacing: 6, children: [
+          for (final f in ['All', 'BUY', 'NEUTRAL', 'SELL', 'STRONG BUY', 'STRONG SELL'])
+            ChoiceChip(label: Text(f), selected: marketSignalFilter == f, onSelected: (_) => setState(() => marketSignalFilter = f)),
+        ]),
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, runSpacing: 6, children: [
+          for (final order in ['Lowest to highest', 'Highest to lowest'])
+            ChoiceChip(label: Text('ADX: $order'), selected: marketAdxOrder == order, onSelected: (_) => setState(() => marketAdxOrder = order)),
+        ]),
+        const SizedBox(height: 8),
+        Row(children: [
+          ElevatedButton.icon(
+            onPressed: scanning ? null : _runMarketScan,
+            icon: const Icon(Icons.radar),
+            label: Text(scanning ? 'Scanning...' : 'Scan market'),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(scanUpdated == null ? 'No scan yet' : '${rows.length} results • ${scanTf} • ${ago(scanUpdated!.toIso8601String())}', style: const TextStyle(fontSize: 11))),
+        ]),
+        if (scanning) LinearProgressIndicator(value: scanProgress == 0 ? null : scanProgress),
+        if (scanError != null) Padding(padding: const EdgeInsets.only(top: 6), child: Text(scanError!, style: const TextStyle(color: Colors.orange, fontSize: 12))),
+        if (rows.isEmpty && !scanning)
+          const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Text('No scan results yet. Tap Scan market to load ADX and signal values.', style: TextStyle(fontSize: 12)))
+        else
+          for (final r in rows.take(50))
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              onTap: () => openCoin(r.coin, scanTf, context),
+              title: Text('${r.coin}  •  ADX ${r.a.adx.toStringAsFixed(1)}', style: const TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Text('Buy ${r.a.buys} / Neutral ${r.a.neutrals} / Sell ${r.a.sells}'),
+              trailing: Text(r.a.verdict, style: TextStyle(fontWeight: FontWeight.bold, color: col(r.a.side))),
+            ),
+        const Text('ADX measures trend strength, not direction. Signal filters are descriptive and do not guarantee profitable trades.', style: TextStyle(fontSize: 11)),
+      ],
+    )));
   }
 
   Widget _mtfCard() {
