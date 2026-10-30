@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'dart:math' as math;
 
@@ -1390,9 +1392,9 @@ class _HomeState extends State<Home> {
   Timer? scanTimer;
   List<AppTrade> trades = [];
   bool autoPaper = false, paperBusy = false;
-  double paperMinScore = 0.35;
-  int paperMaxOpen = 40, paperMinQ = 3, paperRejected = 0, paperCoins = 100, paperMinAdx = 25;
-  Set<String> paperTfs = {'5m', '15m', '1h', '4h', '1d'};
+  double paperMinScore = 0.50;
+  int paperMaxOpen = 8, paperMinQ = 4, paperRejected = 0, paperCoins = 20, paperMinAdx = 25;
+  Set<String> paperTfs = {'5m', '1h', '4h'};
   bool paperScanBusy = false;
   final Map<String, int> paperLogged = {};     // coin|tf -> candle close already handled
   List<String> paperCoinList = [];
@@ -1711,17 +1713,29 @@ class _HomeState extends State<Home> {
         }
       }
       autoPaper = p.getBool('app_paper_auto') ?? false;
-      paperMinScore = p.getDouble('app_paper_min') ?? 0.35;
-      paperMaxOpen = p.getInt('app_paper_max') ?? 40;
-      paperCoins = p.getInt('app_paper_coins') ?? 100;
+      paperMinScore = p.getDouble('app_paper_min') ?? 0.50;
+      paperMaxOpen = p.getInt('app_paper_max') ?? 8;
+      paperCoins = p.getInt('app_paper_coins') ?? 20;
       final tl = p.getStringList('app_paper_tfs');
       if (tl != null && tl.isNotEmpty) paperTfs = tl.toSet();
-      paperMinQ = p.getInt('app_paper_q') ?? 3;
+      paperMinQ = p.getInt('app_paper_q') ?? 4;
       paperMinAdx = p.getInt('app_paper_adx') ?? 25;
-      if (!(p.getBool('app_paper_v2') ?? false)) {                 // one-time update: 30m lost the most in the paper results
+      if (!(p.getBool('app_paper_v3') ?? false)) {
+        // Conservative migration based on the supplied paper-trade CSV: pause 15m/30m/1d
+        // auto entries until they are independently validated; manual scanning remains available.
+        paperTfs.remove('15m');
         paperTfs.remove('30m');
-        if (paperTfs.isEmpty) paperTfs = {'5m', '15m', '1h', '4h', '1d'};
-        await p.setBool('app_paper_v2', true);
+        paperTfs.remove('1d');
+        if (paperTfs.isEmpty) paperTfs = {'5m', '1h', '4h'};
+        paperMinScore = 0.50;
+        paperMaxOpen = 8;
+        paperCoins = 20;
+        paperMinQ = 4;
+        await p.setBool('app_paper_v3', true);
+        await p.setDouble('app_paper_min', paperMinScore);
+        await p.setInt('app_paper_max', paperMaxOpen);
+        await p.setInt('app_paper_coins', paperCoins);
+        await p.setInt('app_paper_q', paperMinQ);
         await p.setStringList('app_paper_tfs', paperTfs.toList());
       }
     } catch (_) {}
@@ -1796,9 +1810,9 @@ class _HomeState extends State<Home> {
     final c = closed.map((x) => x.close).toList();
     final ema20 = emaSeries(c, 20).last;
     final ext = ac.atr > 0 ? (c.last - ema20) * side / ac.atr : 0.0;        // + = stretched in trade direction
-    if (ext > 3) veto = 'price stretched ${ext.toStringAsFixed(1)} ATR from EMA20 (chasing)';
+    if (ext > 1.5) veto = 'price stretched ${ext.toStringAsFixed(1)} ATR from EMA20 (chasing; max 1.5 ATR)';
     final rsi = rsiLast(c, 14);
-    if (veto == null && !rsi.isNaN && ((side == 1 && rsi > 78) || (side == -1 && rsi < 22))) veto = 'RSI exhausted (${rsi.toStringAsFixed(0)})';
+    if (veto == null && !rsi.isNaN && ((side == 1 && rsi > 70) || (side == -1 && rsi < 30))) veto = 'RSI exhausted (${rsi.toStringAsFixed(0)})';
     // relative volume of the last closed candle vs the previous 20
     double? rvol;
     final vols = closed.map((x) => x.volume).toList();
@@ -1806,13 +1820,25 @@ class _HomeState extends State<Home> {
       final avg = vols.sublist(vols.length - 21, vols.length - 1).fold<double>(0, (a, b) => a + b) / 20;
       rvol = avg > 0 ? vols.last / avg : null;
     }
-    if (veto == null && rvol != null && rvol < 0.5) veto = 'dead volume (${rvol.toStringAsFixed(2)}x average)';
+    if (veto == null && rvol != null && rvol < 0.7) veto = 'dead volume (${rvol.toStringAsFixed(2)}x average)';
+    if (veto == null && rvol != null && rvol > 3.0) veto = 'volume spike may be exhaustion (${rvol.toStringAsFixed(2)}x average)';
     // higher timeframes
     final idx = mtfList.indexOf(tf);
     int htfSide(Analysis? a) => a?.side ?? 0;
     final h1 = idx >= 0 && idx + 1 < mtfList.length ? await _closedAnalysis(coin, mtfList[idx + 1]) : null;
     final h2 = idx >= 0 && idx + 2 < mtfList.length ? await _closedAnalysis(coin, mtfList[idx + 2]) : null;
-    if (veto == null && htfSide(h1) == -side) veto = '${mtfList[idx + 1]} trend is against it';
+    if (veto == null && idx >= 0 && idx + 1 < mtfList.length && h1 == null) {
+      veto = '${mtfList[idx + 1]} confirmation unavailable';
+    }
+    if (veto == null && idx >= 0 && idx + 1 < mtfList.length && htfSide(h1) != side) {
+      veto = '${mtfList[idx + 1]} trend does not confirm it';
+    }
+    if (veto == null && idx >= 0 && idx + 2 < mtfList.length && h2 == null) {
+      veto = '${mtfList[idx + 2]} confirmation unavailable';
+    }
+    if (veto == null && idx >= 0 && idx + 2 < mtfList.length && htfSide(h2) != side) {
+      veto = '${mtfList[idx + 2]} trend does not confirm it';
+    }
     // market regime: altcoins should not fight Bitcoin
     var btc = 0;
     if (!yahooPairs.containsKey(coin) && coin != 'BTC') {
@@ -1821,21 +1847,27 @@ class _HomeState extends State<Home> {
       if (veto == null && btc == -side) veto = 'Bitcoin trend is against it';
     }
     // crowding and news
-    var crowdOk = true;
+    var crowdOk = true, crowdKnown = false;
     if (!yahooPairs.containsKey(coin)) {
       try {
         final fr = (await fetchFutMeta(coin))['funding'];
-        if (fr != null && ((side == 1 && fr > 0.05) || (side == -1 && fr < -0.05))) crowdOk = false;
+        if (fr != null) {
+          crowdKnown = true;
+          if ((side == 1 && fr > 0.05) || (side == -1 && fr < -0.05)) crowdOk = false;
+        }
       } catch (_) {}
     }
     final ns = news.isEmpty ? 0 : newsScore(coin);
-    if (ns * side <= -2) crowdOk = false;
+    if (news.isNotEmpty) {
+      crowdKnown = true;
+      if (ns * side <= -2) crowdOk = false;
+    }
     var q = 0, htf = 0;
-    if (h1 == null || htfSide(h1) == side) { q++; if (h1 != null) htf++; }
-    if (h2 == null || htfSide(h2) == side) { q++; if (h2 != null) htf++; }
-    if (rvol == null || rvol >= 1.2) q++;
+    if (h1 != null && htfSide(h1) == side) { q++; htf++; }
+    if (h2 != null && htfSide(h2) == side) { q++; htf++; }
+    if (rvol != null && rvol >= 1.2 && rvol <= 3.0) q++;
     if (!ac.adx.isNaN && ac.adx >= 20) q++;
-    if (crowdOk) q++;
+    if (crowdKnown && crowdOk) q++;
     final why = veto ?? (q < paperMinQ ? 'quality $q of 5, needs $paperMinQ' : null);
     return {'ok': why == null, 'why': why, 'q': q, 'htf': htf, 'rvol': rvol, 'ext': ext, 'btc': btc};
   }
@@ -1893,14 +1925,19 @@ class _HomeState extends State<Home> {
         final coin = m['coin'] as String, tf = m['tf'] as String;
         final ac = m['ac'] as Analysis;
         final cs = m['cs'] as List<Candle>;
-        if (trades.any((t) => t.isOpen && t.coin == coin && t.tf == tf)) continue;
+        if (trades.any((t) => t.isOpen && t.coin == coin)) continue; // avoid duplicate exposure across timeframes
+        if (trades.where((t) => t.isOpen && t.side == ac.side).length >= 3) continue; // avoid crowded one-way exposure
         if (eventSoon(coin) != null) continue;                         // same news blackout as the Final call
         final holdH = paperHoldHours[tf] ?? 48;
         final cooldown = trades.any((t) => !t.isOpen && t.coin == coin && t.tf == tf && t.closed != null &&
             DateTime.now().difference(t.closed!).inMinutes < holdH * 15);   // wait a quarter of the hold time after a close
         if (cooldown) continue;
-        final live = analyze(cs, 2);                                   // entry price and plan come from the live candle
-        if (live.side != ac.side) continue;
+        // Use only the fully closed candle for the signal. Enter at the next candle's open
+        // so the signal does not depend on a still-forming/repainting candle.
+        final entryAnalysis = Analysis(
+          ac.ma, ac.osc, ac.info, ac.buys, ac.sells, ac.neutrals,
+          cs.last.open, ac.atr, ac.adx, ac.score, ac.sup, ac.res,
+        );
         Map<String, dynamic>? q;
         if (paperMinQ > 0) {
           if (++qchecked > 40) break;                                  // keep each cycle fast
@@ -1912,7 +1949,7 @@ class _HomeState extends State<Home> {
             continue;
           }
         }
-        if (openPaperTrade(coin, tf, live, 'auto', q) != null) opened++;
+        if (openPaperTrade(coin, tf, entryAnalysis, 'auto', q) != null) opened++;
       }
       if (opened > 0) await savePaper();
       paperStatus = 'Last check ${hhmm(DateTime.now())}: ${jobs.length} pairs, ${cands.length} signals, $opened opened, $rejected filtered out.';
@@ -1975,6 +2012,30 @@ class _HomeState extends State<Home> {
     }
   }
 
+  Future<void> downloadCsv(String fileName, String contents) async {
+    try {
+      final savedPath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save CSV log',
+        fileName: fileName,
+        type: FileType.custom,
+        allowedExtensions: const ['csv'],
+        bytes: Uint8List.fromList(utf8.encode(contents)),
+      );
+      if (savedPath == null) {
+        toast('Download cancelled.');
+      } else {
+        toast('CSV saved successfully.');
+      }
+    } catch (e) {
+      toast('Could not save the CSV: $e');
+    }
+  }
+
+  Future<void> downloadAppLog() async {
+    if (trades.isEmpty) return toast('No in-app paper trades yet.');
+    await downloadCsv('app_paper_trades.csv', tradesToCsv(trades));
+  }
+
   Future<void> shareAppLog() async {
     if (trades.isEmpty) return toast('No in-app paper trades yet.');
     final f = await _writeTemp('app_paper_trades.csv', tradesToCsv(trades));
@@ -1990,6 +2051,26 @@ class _HomeState extends State<Home> {
     if (trades.isEmpty) return toast('No in-app paper trades yet.');
     await Clipboard.setData(ClipboardData(text: tradesToCsv(trades)));
     toast('Copied ${trades.length} trades to the clipboard.');
+  }
+
+  Future<void> downloadAllLogs() async {
+    var count = 0;
+    if (trades.isNotEmpty) {
+      await downloadCsv('app_paper_trades.csv', tradesToCsv(trades));
+      count++;
+    }
+    final bot = await fetchPaperCsv();
+    if (bot != null) {
+      await downloadCsv('bot_paper_log.csv', bot);
+      count++;
+    }
+    if (labAgg.isNotEmpty) {
+      await downloadCsv('lab_indicator_accuracy.csv', labAggCsv(labAgg));
+      count++;
+      await downloadCsv('lab_signal_snapshots.csv', labRowsCsv(labRows));
+      count++;
+    }
+    if (count == 0) toast('No logs are available to download yet.');
   }
 
   Future<void> shareBothLogs() async {
@@ -2964,6 +3045,12 @@ class _HomeState extends State<Home> {
     }
   }
 
+  Future<void> downloadBotLog() async {
+    final csv = await fetchPaperCsv();
+    if (csv == null) return;
+    await downloadCsv('paper_trading_log.csv', csv);
+  }
+
   Future<void> shareLog() async {
     final csv = await fetchPaperCsv();
     if (csv == null) return;
@@ -2994,7 +3081,8 @@ class _HomeState extends State<Home> {
           const Text('Every virtual trade as a CSV file: entry, stop, target, exit and reason, result in R, best and worst move after entry, plus ADX, RSI, news mood, 4h trend, hour and weekday at the time of the signal. Send it to tune the bot.', style: TextStyle(fontSize: 12)),
           const SizedBox(height: 8),
           Wrap(spacing: 8, children: [
-            ElevatedButton.icon(onPressed: shareLog, icon: const Icon(Icons.download), label: const Text('Download / share CSV')),
+            ElevatedButton.icon(onPressed: downloadBotLog, icon: const Icon(Icons.download), label: const Text('Download CSV')),
+            OutlinedButton.icon(onPressed: shareLog, icon: const Icon(Icons.share), label: const Text('Share CSV')),
             OutlinedButton.icon(onPressed: copyLog, icon: const Icon(Icons.copy), label: const Text('Copy to clipboard')),
           ]),
           const SizedBox(height: 6),
@@ -3199,10 +3287,13 @@ class _HomeState extends State<Home> {
             const Text('In-app log: every trade with entry, stop, target, exit and reason, result in R, best and worst move after entry, verdict, score, indicator counts, ADX, ATR %, news mood, hour and weekday. The bot log uses the same column names, so you can compare them.', style: TextStyle(fontSize: 12)),
             const SizedBox(height: 8),
             Wrap(spacing: 8, children: [
-              ElevatedButton.icon(onPressed: shareAppLog, icon: const Icon(Icons.download), label: const Text('In-app log (CSV)')),
+              ElevatedButton.icon(onPressed: downloadAppLog, icon: const Icon(Icons.download), label: const Text('Download app log')),
+              OutlinedButton.icon(onPressed: shareAppLog, icon: const Icon(Icons.share), label: const Text('Share app log')),
               OutlinedButton.icon(onPressed: copyAppLog, icon: const Icon(Icons.copy), label: const Text('Copy')),
-              OutlinedButton.icon(onPressed: shareLog, icon: const Icon(Icons.smart_toy), label: const Text('Bot log (CSV)')),
-              OutlinedButton.icon(onPressed: shareBothLogs, icon: const Icon(Icons.folder_zip), label: const Text('All logs')),
+              OutlinedButton.icon(onPressed: downloadBotLog, icon: const Icon(Icons.download), label: const Text('Download bot log')),
+              OutlinedButton.icon(onPressed: shareLog, icon: const Icon(Icons.smart_toy), label: const Text('Share bot log')),
+              OutlinedButton.icon(onPressed: downloadAllLogs, icon: const Icon(Icons.download_for_offline), label: const Text('Download all logs')),
+              OutlinedButton.icon(onPressed: shareBothLogs, icon: const Icon(Icons.share), label: const Text('Share all logs')),
             ]),
             const SizedBox(height: 6),
             Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: trades.isEmpty ? null : resetPaper, icon: const Icon(Icons.delete_outline), label: const Text('Reset in-app paper account'))),
@@ -3321,7 +3412,8 @@ class _HomeState extends State<Home> {
             Wrap(spacing: 8, children: [
               ElevatedButton.icon(onPressed: shareLabAcc, icon: const Icon(Icons.download), label: const Text('Accuracy table')),
               OutlinedButton.icon(onPressed: shareLabRows, icon: const Icon(Icons.table_chart), label: const Text('Raw snapshots')),
-              OutlinedButton.icon(onPressed: shareBothLogs, icon: const Icon(Icons.folder_zip), label: const Text('All logs')),
+              OutlinedButton.icon(onPressed: downloadAllLogs, icon: const Icon(Icons.download_for_offline), label: const Text('Download all logs')),
+              OutlinedButton.icon(onPressed: shareBothLogs, icon: const Icon(Icons.share), label: const Text('Share all logs')),
             ]),
             Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: resetLab, icon: const Icon(Icons.delete_outline), label: const Text('Reset Lab'))),
           ]),
