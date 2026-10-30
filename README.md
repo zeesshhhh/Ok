@@ -96,3 +96,7 @@ Telegram stays your push-notification channel. The app is for viewing.
 - Keltner, Donchian, ADX, Ichimoku and SMA 50 count more; candle patterns count less.
 - Auto paper trading only takes signals with ADX of 25 or more (setting: Minimum ADX), skips coins with ATR above 8% or a stop/target at or below zero, and 30m is off by default.
 - `histlab.py` (optional, see HISTLAB_README.md) checks all of this on months of history.
+
+
+## Paper-trading accuracy review
+See `PAPER_TRADE_DIAGNOSIS.md` for the supplied CSV results, the missing-confirmation scoring issue, conservative auto-paper changes, and testing limitations.
