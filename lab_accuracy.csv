@@ -1,0 +1,349 @@
+indicator,category,style,signals,direction_accuracy_pct,direction_expected_pct,race_wins,race_losses,race_win_pct,race_expected_pct,excess_pts,z_if_independent,avg_move_atr
+ADX (14),Trend,All,191554,49.2,50.1,58793,53079,52.6,50.0,2.5,17.04,0.037
+ADX (14),Trend,Forward,16922,48.2,49.9,5094,4793,51.5,50.1,1.5,2.92,-0.027
+ADX (14),Trend,Intraday,60635,49.1,50.0,18336,16291,53.0,50.0,2.9,10.85,0.014
+ADX (14),Trend,Position,15126,49.7,49.9,4725,4191,53.0,50.3,2.7,5.03,0.062
+ADX (14),Trend,Scalping,65531,49.8,50.2,19948,18051,52.5,50.2,2.3,9.01,0.043
+ADX (14),Trend,Swing,50262,48.3,50.0,15784,14546,52.0,50.1,2.0,6.83,0.049
+Aroon (25),Trend,All,151450,49.3,50.1,47029,44173,51.6,50.0,1.6,9.41,0.023
+Aroon (25),Trend,Forward,13336,48.2,49.9,4135,3740,52.5,50.0,2.5,4.40,-0.011
+Aroon (25),Trend,Intraday,45659,49.3,50.0,14648,13152,52.7,50.0,2.7,9.05,0.049
+Aroon (25),Trend,Position,11734,48.8,50.1,3475,3524,49.6,50.2,-0.6,-0.98,0.054
+Aroon (25),Trend,Scalping,55828,50.4,50.2,17362,15721,52.5,50.2,2.3,8.26,0.031
+Aroon (25),Trend,Swing,38229,47.7,50.0,11544,11776,49.5,50.1,-0.6,-1.70,-0.027
+Awesome Oscillator,Momentum / oscillators,All,280154,49.3,50.1,84187,80082,51.2,50.0,1.2,10.01,0.018
+Awesome Oscillator,Momentum / oscillators,Forward,24624,47.9,50.0,7172,7139,50.1,50.0,0.1,0.26,-0.000
+Awesome Oscillator,Momentum / oscillators,Intraday,86588,49.1,50.0,25740,24037,51.7,50.0,1.7,7.64,-0.000
+Awesome Oscillator,Momentum / oscillators,Position,21750,50.5,50.3,6634,6141,51.9,50.0,1.9,4.30,0.057
+Awesome Oscillator,Momentum / oscillators,Scalping,100998,49.5,50.2,30060,28870,51.0,50.1,0.9,4.18,0.021
+Awesome Oscillator,Momentum / oscillators,Swing,70818,48.9,50.0,21753,21034,50.8,50.0,0.8,3.42,0.023
+"Bollinger %B (20,2)",Breakout / volatility,All,50491,51.1,50.0,16116,18457,46.6,50.0,-3.4,-12.68,-0.084
+"Bollinger %B (20,2)",Breakout / volatility,Forward,4382,49.2,50.0,1354,1654,45.0,50.0,-5.0,-5.48,-0.130
+"Bollinger %B (20,2)",Breakout / volatility,Intraday,15816,51.7,50.0,4978,5666,46.8,50.0,-3.3,-6.77,-0.051
+"Bollinger %B (20,2)",Breakout / volatility,Position,3863,49.6,50.3,1157,1392,45.4,49.3,-3.9,-3.96,-0.126
+"Bollinger %B (20,2)",Breakout / volatility,Scalping,17562,50.2,49.8,5641,6317,47.2,49.8,-2.7,-5.85,-0.090
+"Bollinger %B (20,2)",Breakout / volatility,Swing,13250,52.0,50.0,4340,5082,46.1,49.9,-3.8,-7.39,-0.105
+CCI (20),Momentum / oscillators,All,112767,50.8,49.9,33808,37586,47.4,50.0,-2.6,-14.15,-0.046
+CCI (20),Momentum / oscillators,Forward,9904,50.1,50.0,2907,3307,46.8,50.0,-3.2,-5.07,-0.073
+CCI (20),Momentum / oscillators,Intraday,34626,50.6,50.0,10123,11586,46.6,50.0,-3.4,-9.97,-0.059
+CCI (20),Momentum / oscillators,Position,8710,50.7,49.8,2594,2837,47.8,49.7,-2.0,-2.90,-0.035
+CCI (20),Momentum / oscillators,Scalping,40898,49.8,49.8,12133,13365,47.6,49.8,-2.3,-7.23,-0.047
+CCI (20),Momentum / oscillators,Swing,28533,52.3,50.0,8958,9798,47.8,49.9,-2.2,-5.93,-0.034
+COMPOSITE contrarian [ADX<20],Overall verdict,All,41072,50.8,49.9,11993,12994,48.0,50.0,-2.0,-6.21,-0.038
+COMPOSITE contrarian [ADX<20],Overall verdict,Forward,3600,52.5,49.8,1118,1004,52.7,50.1,2.6,2.40,0.021
+COMPOSITE contrarian [ADX<20],Overall verdict,Intraday,11922,50.1,49.9,3376,3901,46.4,50.0,-3.6,-6.09,-0.108
+COMPOSITE contrarian [ADX<20],Overall verdict,Position,3211,47.8,49.4,876,983,47.1,50.1,-3.0,-2.61,-0.063
+COMPOSITE contrarian [ADX<20],Overall verdict,Scalping,16545,51.9,49.7,4962,4903,50.3,49.8,0.5,0.97,0.029
+COMPOSITE contrarian [ADX<20],Overall verdict,Swing,9394,50.8,50.0,2779,3207,46.4,50.0,-3.6,-5.59,-0.057
+COMPOSITE contrarian [ADX>25],Overall verdict,All,77119,49.8,49.9,22058,24471,47.4,50.0,-2.6,-11.12,-0.055
+COMPOSITE contrarian [ADX>25],Overall verdict,Forward,7039,47.6,49.9,1983,2322,46.1,50.1,-4.0,-5.26,-0.145
+COMPOSITE contrarian [ADX>25],Overall verdict,Intraday,24761,50.6,49.9,6971,7748,47.4,50.0,-2.6,-6.30,-0.048
+COMPOSITE contrarian [ADX>25],Overall verdict,Position,5656,52.2,49.6,1754,1740,50.2,49.8,0.4,0.46,0.032
+COMPOSITE contrarian [ADX>25],Overall verdict,Scalping,26229,47.4,49.8,7161,8250,46.5,49.8,-3.4,-8.35,-0.093
+COMPOSITE contrarian [ADX>25],Overall verdict,Swing,20473,51.3,50.0,6172,6733,47.8,50.0,-2.1,-4.86,-0.038
+COMPOSITE contrarian,Overall verdict,All,145944,50.2,49.9,42147,46128,47.7,50.0,-2.2,-13.26,-0.043
+COMPOSITE contrarian,Overall verdict,Forward,13097,49.2,49.9,3813,4111,48.1,50.1,-1.9,-3.47,-0.087
+COMPOSITE contrarian,Overall verdict,Intraday,45346,50.4,50.0,12842,14301,47.3,50.0,-2.7,-8.75,-0.058
+COMPOSITE contrarian,Overall verdict,Position,11143,50.4,49.5,3298,3437,49.0,50.0,-1.0,-1.64,-0.013
+COMPOSITE contrarian,Overall verdict,Scalping,52545,49.2,49.8,14946,16270,47.9,49.8,-1.9,-6.87,-0.046
+COMPOSITE contrarian,Overall verdict,Swing,36910,51.4,50.0,11061,12120,47.7,50.0,-2.3,-6.95,-0.030
+COMPOSITE trend-following [ADX<20],Overall verdict,All,71803,48.5,50.1,21898,21156,50.9,50.0,0.8,3.42,0.017
+COMPOSITE trend-following [ADX<20],Overall verdict,Forward,6103,46.3,50.1,1669,1884,47.0,49.9,-3.0,-3.52,-0.040
+COMPOSITE trend-following [ADX<20],Overall verdict,Intraday,21042,49.4,50.0,6666,5972,52.7,50.0,2.8,6.20,0.091
+COMPOSITE trend-following [ADX<20],Overall verdict,Position,5440,51.5,50.9,1595,1574,50.3,49.7,0.7,0.74,0.047
+COMPOSITE trend-following [ADX<20],Overall verdict,Scalping,28596,47.2,50.2,8410,8638,49.3,50.1,-0.8,-2.11,-0.032
+COMPOSITE trend-following [ADX<20],Overall verdict,Swing,16725,48.6,50.0,5227,4972,51.3,49.9,1.3,2.72,-0.001
+COMPOSITE trend-following [ADX>25],Overall verdict,All,122258,48.9,50.1,37758,34055,52.6,50.0,2.6,13.75,0.031
+COMPOSITE trend-following [ADX>25],Overall verdict,Forward,10760,48.2,50.0,3298,3023,52.2,50.0,2.1,3.42,-0.013
+COMPOSITE trend-following [ADX>25],Overall verdict,Intraday,39063,48.6,50.1,11948,10420,53.4,50.1,3.4,10.06,0.020
+COMPOSITE trend-following [ADX>25],Overall verdict,Position,9515,48.4,50.2,2850,2773,50.7,50.3,0.4,0.60,0.026
+COMPOSITE trend-following [ADX>25],Overall verdict,Scalping,41593,50.3,50.3,12735,11353,52.9,50.2,2.6,8.19,0.038
+COMPOSITE trend-following [ADX>25],Overall verdict,Swing,32087,47.8,50.0,10225,9509,51.8,50.1,1.7,4.86,0.039
+COMPOSITE trend-following strong,Overall verdict,All,170796,49.0,50.1,54162,49085,52.5,50.0,2.4,15.62,0.043
+COMPOSITE trend-following strong,Overall verdict,Forward,14804,48.3,50.0,4626,4402,51.2,50.0,1.2,2.37,0.008
+COMPOSITE trend-following strong,Overall verdict,Intraday,52805,48.9,50.0,16857,14887,53.1,50.0,3.1,10.97,0.047
+COMPOSITE trend-following strong,Overall verdict,Position,13216,49.8,50.6,3978,3873,50.7,50.0,0.7,1.17,0.051
+COMPOSITE trend-following strong,Overall verdict,Scalping,61406,49.8,50.3,19447,17585,52.5,50.2,2.3,8.82,0.047
+COMPOSITE trend-following strong,Overall verdict,Swing,43369,47.7,50.0,13880,12740,52.1,50.0,2.1,6.95,0.033
+COMPOSITE trend-following,Overall verdict,All,238107,48.9,50.1,73229,67771,51.9,50.0,1.9,14.38,0.030
+COMPOSITE trend-following,Overall verdict,Forward,20694,48.0,50.0,6173,6041,50.5,50.0,0.5,1.21,-0.005
+COMPOSITE trend-following,Overall verdict,Intraday,73687,48.9,50.0,22685,20295,52.8,50.0,2.8,11.48,0.037
+COMPOSITE trend-following,Overall verdict,Position,18541,49.8,50.5,5542,5366,50.8,50.0,0.8,1.65,0.035
+COMPOSITE trend-following,Overall verdict,Scalping,85652,49.3,50.2,26139,24320,51.8,50.2,1.6,7.29,0.027
+COMPOSITE trend-following,Overall verdict,Swing,60227,48.1,50.0,18863,17790,51.5,50.0,1.5,5.56,0.024
+Candle pattern,Candle patterns,All,92931,49.1,50.0,27169,27139,50.0,50.0,0.0,0.09,-0.004
+Candle pattern,Candle patterns,Forward,8170,50.7,50.0,2376,2267,51.2,50.0,1.2,1.60,0.052
+Candle pattern,Candle patterns,Intraday,28490,49.1,50.0,8200,8195,50.0,50.0,0.0,0.05,-0.011
+Candle pattern,Candle patterns,Position,7531,50.3,50.2,2193,2220,49.7,49.9,-0.2,-0.24,0.041
+Candle pattern,Candle patterns,Scalping,33373,48.8,50.0,9766,9577,50.5,50.0,0.5,1.31,0.001
+Candle pattern,Candle patterns,Swing,23537,49.3,50.0,7010,7147,49.5,50.0,-0.5,-1.09,-0.015
+Chaikin Money Flow (20),Volume,All,208753,49.8,50.1,61993,60399,50.7,50.0,0.6,4.38,0.020
+Chaikin Money Flow (20),Volume,Forward,18412,48.9,50.1,5338,5420,49.6,50.0,-0.4,-0.73,-0.016
+Chaikin Money Flow (20),Volume,Intraday,65114,50.5,50.0,19534,17937,52.1,50.0,2.1,8.30,0.060
+Chaikin Money Flow (20),Volume,Position,15296,49.6,50.6,4315,4599,48.4,49.8,-1.4,-2.58,-0.032
+Chaikin Money Flow (20),Volume,Scalping,75610,49.6,50.2,22121,21864,50.3,50.2,0.1,0.48,-0.002
+Chaikin Money Flow (20),Volume,Swing,52733,49.0,50.0,16023,15999,50.0,50.0,0.0,0.18,0.016
+"Chandelier Exit (22,3)",Trend,All,280154,49.2,50.0,83201,81068,50.6,50.0,0.6,5.24,0.013
+"Chandelier Exit (22,3)",Trend,Forward,24624,48.5,50.0,7223,7088,50.5,50.0,0.5,1.14,0.055
+"Chandelier Exit (22,3)",Trend,Intraday,86588,49.3,50.0,25564,24213,51.4,50.0,1.4,6.28,0.012
+"Chandelier Exit (22,3)",Trend,Position,21750,48.9,50.4,6269,6506,49.1,49.9,-0.9,-1.97,0.018
+"Chandelier Exit (22,3)",Trend,Scalping,100998,49.8,50.0,29948,28982,50.8,50.1,0.8,3.70,0.028
+"Chandelier Exit (22,3)",Trend,Swing,70818,48.3,50.0,21420,21367,50.1,50.0,0.1,0.30,-0.011
+Donchian break (20),Breakout / volatility,All,27442,48.5,50.0,9956,8991,52.5,50.0,2.6,7.06,0.091
+Donchian break (20),Breakout / volatility,Forward,2463,50.1,50.0,894,770,53.7,50.0,3.7,3.06,0.137
+Donchian break (20),Breakout / volatility,Intraday,8505,47.9,50.0,3171,2759,53.5,49.9,3.5,5.44,0.093
+Donchian break (20),Breakout / volatility,Position,2012,51.3,49.9,758,625,54.8,50.5,4.3,3.20,0.131
+Donchian break (20),Breakout / volatility,Scalping,10223,49.7,50.1,3568,3317,51.8,50.1,1.7,2.82,0.105
+Donchian break (20),Breakout / volatility,Swing,6702,46.6,50.0,2459,2290,51.8,50.1,1.7,2.31,0.055
+EMA 100,Trend,All,280154,49.5,50.2,84779,79490,51.6,50.0,1.6,12.69,0.035
+EMA 100,Trend,Forward,24624,49.0,50.1,7338,6973,51.3,50.0,1.3,3.09,0.001
+EMA 100,Trend,Intraday,86588,49.3,50.1,25956,23821,52.1,50.1,2.1,9.28,0.036
+EMA 100,Trend,Position,21750,50.7,50.7,6327,6448,49.5,49.7,-0.2,-0.50,0.020
+EMA 100,Trend,Scalping,100998,49.6,50.3,30412,28518,51.6,50.2,1.4,6.67,0.040
+EMA 100,Trend,Swing,70818,49.0,50.0,22084,20703,51.6,50.0,1.6,6.77,0.031
+EMA 10,Trend,All,280154,48.9,50.1,84862,79407,51.7,50.0,1.7,13.40,0.021
+EMA 10,Trend,Forward,24624,49.6,50.0,7432,6879,51.9,50.0,1.9,4.65,0.032
+EMA 10,Trend,Intraday,86588,48.9,50.0,25956,23821,52.1,50.0,2.1,9.58,0.037
+EMA 10,Trend,Position,21750,49.2,50.3,6410,6365,50.2,50.1,0.1,0.27,0.003
+EMA 10,Trend,Scalping,100998,49.4,50.1,30597,28333,51.9,50.1,1.8,8.84,0.021
+EMA 10,Trend,Swing,70818,48.0,50.0,21899,20888,51.2,50.0,1.2,4.82,0.006
+EMA 200,Trend,All,257032,49.9,50.2,78120,72457,51.9,50.1,1.8,14.11,0.043
+EMA 200,Trend,Forward,24390,48.7,50.1,7221,6961,50.9,50.0,0.9,2.22,-0.006
+EMA 200,Trend,Intraday,80496,50.0,50.1,24281,21939,52.5,50.1,2.5,10.54,0.050
+EMA 200,Trend,Position,17045,51.5,51.0,4758,4961,49.0,49.5,-0.6,-1.14,0.012
+EMA 200,Trend,Scalping,94667,50.1,50.5,28819,26572,52.0,50.3,1.7,8.00,0.049
+EMA 200,Trend,Swing,64824,49.3,50.0,20262,18985,51.6,50.0,1.6,6.53,0.035
+EMA 20,Trend,All,280154,48.9,50.1,84900,79369,51.7,50.0,1.7,13.56,0.022
+EMA 20,Trend,Forward,24624,48.5,50.0,7281,7030,50.9,50.0,0.9,2.11,0.012
+EMA 20,Trend,Intraday,86588,48.8,50.0,26044,23733,52.3,50.0,2.3,10.36,0.026
+EMA 20,Trend,Position,21750,49.7,50.4,6500,6275,50.9,50.0,0.8,1.88,0.023
+EMA 20,Trend,Scalping,100998,49.2,50.2,30454,28476,51.7,50.1,1.6,7.53,0.021
+EMA 20,Trend,Swing,70818,48.1,50.0,21902,20885,51.2,50.0,1.2,4.83,0.019
+EMA 30,Trend,All,280154,49.1,50.1,85022,79247,51.8,50.0,1.7,14.12,0.028
+EMA 30,Trend,Forward,24624,48.4,50.0,7273,7038,50.8,50.0,0.8,1.97,-0.006
+EMA 30,Trend,Intraday,86588,49.1,50.0,26119,23658,52.5,50.0,2.5,10.99,0.033
+EMA 30,Trend,Position,21750,50.2,50.4,6549,6226,51.3,50.0,1.2,2.78,0.046
+EMA 30,Trend,Scalping,100998,49.4,50.2,30401,28529,51.6,50.1,1.4,7.01,0.025
+EMA 30,Trend,Swing,70818,48.2,50.0,21953,20834,51.3,50.0,1.3,5.38,0.021
+EMA 50,Trend,All,280154,49.2,50.1,84983,79286,51.7,50.0,1.7,13.85,0.029
+EMA 50,Trend,Forward,24624,48.6,50.0,7278,7033,50.9,50.0,0.9,2.05,-0.017
+EMA 50,Trend,Intraday,86588,49.2,50.0,26090,23687,52.4,50.0,2.4,10.66,0.033
+EMA 50,Trend,Position,21750,50.0,50.5,6405,6370,50.1,49.9,0.2,0.43,0.028
+EMA 50,Trend,Scalping,100998,49.5,50.2,30481,28449,51.7,50.2,1.6,7.60,0.030
+EMA 50,Trend,Swing,70818,48.5,50.0,22007,20780,51.4,50.0,1.4,5.97,0.023
+Elder Ray (13),Momentum / oscillators,All,54806,48.5,50.0,16409,15771,51.0,50.0,1.0,3.55,0.001
+Elder Ray (13),Momentum / oscillators,Forward,4627,49.4,50.0,1368,1305,51.2,50.0,1.2,1.19,-0.026
+Elder Ray (13),Momentum / oscillators,Intraday,16989,47.9,50.0,4844,4798,50.2,50.0,0.2,0.46,0.014
+Elder Ray (13),Momentum / oscillators,Position,4358,49.4,50.1,1304,1238,51.3,50.1,1.2,1.22,0.020
+Elder Ray (13),Momentum / oscillators,Scalping,19483,49.0,50.1,5984,5513,52.0,50.0,2.0,4.30,-0.006
+Elder Ray (13),Momentum / oscillators,Swing,13976,48.2,50.0,4277,4222,50.3,50.0,0.3,0.57,-0.012
+Heikin-Ashi trend,Trend,All,157105,48.9,50.1,47812,44660,51.7,50.0,1.7,10.32,0.021
+Heikin-Ashi trend,Trend,Forward,13983,50.1,50.1,4340,3838,53.1,50.0,3.1,5.61,0.059
+Heikin-Ashi trend,Trend,Intraday,48817,48.9,50.0,14703,13462,52.2,50.0,2.2,7.39,0.035
+Heikin-Ashi trend,Trend,Position,12056,48.6,50.3,3530,3608,49.5,50.1,-0.6,-1.07,-0.038
+Heikin-Ashi trend,Trend,Scalping,56220,49.7,50.1,17007,15824,51.8,50.1,1.7,6.12,0.027
+Heikin-Ashi trend,Trend,Swing,40012,48.1,50.0,12572,11766,51.7,50.0,1.6,5.07,0.013
+Hull MA (9),Trend,All,280154,49.4,50.0,83344,80925,50.7,50.0,0.7,5.98,0.023
+Hull MA (9),Trend,Forward,24624,50.9,50.0,7406,6905,51.8,50.0,1.7,4.18,0.015
+Hull MA (9),Trend,Intraday,86588,49.6,50.0,25152,24625,50.5,50.0,0.5,2.36,0.028
+Hull MA (9),Trend,Position,21750,50.1,49.9,6437,6338,50.4,50.1,0.3,0.62,0.050
+Hull MA (9),Trend,Scalping,100998,48.9,50.0,29781,29149,50.5,50.0,0.5,2.53,0.016
+Hull MA (9),Trend,Swing,70818,49.7,50.0,21974,20813,51.4,50.0,1.3,5.58,0.018
+Ichimoku,Trend,All,182029,49.3,50.1,55445,52180,51.5,50.0,1.5,9.76,0.037
+Ichimoku,Trend,Forward,16110,48.3,50.0,4822,4668,50.8,50.0,0.8,1.60,-0.004
+Ichimoku,Trend,Intraday,56005,49.3,50.0,17319,15732,52.4,50.0,2.4,8.62,0.046
+Ichimoku,Trend,Position,14287,50.2,50.6,4281,4202,50.5,49.9,0.5,0.97,0.072
+Ichimoku,Trend,Scalping,65250,49.8,50.2,19443,18456,51.3,50.2,1.1,4.43,0.027
+Ichimoku,Trend,Swing,46487,48.5,50.0,14402,13790,51.1,50.0,1.1,3.74,0.029
+"Keltner channel (20,2)",Breakout / volatility,All,36865,50.3,50.0,13277,11215,54.2,50.0,4.2,13.20,0.130
+"Keltner channel (20,2)",Breakout / volatility,Forward,3425,50.5,50.3,1211,1014,54.4,49.9,4.5,4.25,0.045
+"Keltner channel (20,2)",Breakout / volatility,Intraday,11870,49.7,50.0,4327,3619,54.5,50.0,4.4,7.90,0.129
+"Keltner channel (20,2)",Breakout / volatility,Position,2313,49.4,49.6,864,743,53.8,50.8,2.9,2.36,0.145
+"Keltner channel (20,2)",Breakout / volatility,Scalping,13470,51.3,50.3,4644,4048,53.4,50.2,3.2,6.02,0.103
+"Keltner channel (20,2)",Breakout / volatility,Swing,9212,49.7,50.0,3442,2805,55.1,50.1,5.0,7.85,0.165
+Linear regression (50),Trend,All,121456,49.2,50.1,36382,34875,51.1,50.0,1.0,5.46,0.003
+Linear regression (50),Trend,Forward,10971,47.2,49.9,3128,3289,48.7,50.1,-1.3,-2.15,-0.126
+Linear regression (50),Trend,Intraday,35891,49.3,50.0,10877,9985,52.1,50.0,2.1,6.04,0.007
+Linear regression (50),Trend,Position,9887,50.5,50.4,2920,2815,50.9,50.0,0.9,1.37,0.073
+Linear regression (50),Trend,Scalping,44999,48.8,50.4,13069,13029,50.1,50.2,-0.2,-0.49,-0.026
+Linear regression (50),Trend,Swing,30679,49.1,50.0,9516,9046,51.3,50.0,1.3,3.48,0.017
+"MACD (12,26,9)",Momentum / oscillators,All,280154,49.6,50.0,84585,79684,51.5,50.0,1.5,12.23,0.030
+"MACD (12,26,9)",Momentum / oscillators,Forward,24624,49.7,50.0,7365,6946,51.5,50.0,1.5,3.57,0.065
+"MACD (12,26,9)",Momentum / oscillators,Intraday,86588,49.5,50.0,25839,23938,51.9,50.0,1.9,8.67,0.035
+"MACD (12,26,9)",Momentum / oscillators,Position,21750,48.2,49.8,6458,6317,50.6,50.3,0.3,0.63,-0.010
+"MACD (12,26,9)",Momentum / oscillators,Scalping,100998,50.3,50.0,30475,28455,51.7,50.0,1.7,8.22,0.041
+"MACD (12,26,9)",Momentum / oscillators,Swing,70818,49.1,50.0,21813,20974,51.0,50.1,0.9,3.79,0.020
+MFI (14),Volume,All,36468,48.4,49.8,10202,12447,45.0,50.0,-4.9,-14.81,-0.118
+MFI (14),Volume,Forward,3609,46.7,49.8,957,1210,44.2,50.1,-5.9,-5.54,-0.211
+MFI (14),Volume,Intraday,12162,47.8,49.9,3248,4138,44.0,49.9,-5.9,-10.15,-0.141
+MFI (14),Volume,Position,1698,52.0,50.7,532,563,48.6,49.2,-0.6,-0.42,-0.008
+MFI (14),Volume,Scalping,13133,46.8,49.5,3555,4373,44.8,49.6,-4.8,-8.52,-0.126
+MFI (14),Volume,Swing,9475,50.9,50.0,2867,3373,45.9,49.9,-4.0,-6.26,-0.096
+Momentum (10),Momentum / oscillators,All,279019,49.1,50.0,84340,79277,51.5,50.0,1.5,12.50,0.023
+Momentum (10),Momentum / oscillators,Forward,24522,48.9,50.0,7242,7013,50.8,50.0,0.8,1.93,0.028
+Momentum (10),Momentum / oscillators,Intraday,86248,48.9,50.0,25639,23974,51.7,50.0,1.7,7.51,0.029
+Momentum (10),Momentum / oscillators,Position,21740,48.9,50.2,6446,6323,50.5,50.1,0.4,0.85,-0.008
+Momentum (10),Momentum / oscillators,Scalping,100353,49.6,50.1,30315,28216,51.8,50.1,1.7,8.19,0.025
+Momentum (10),Momentum / oscillators,Swing,70678,48.7,50.0,21940,20764,51.4,50.0,1.3,5.52,0.021
+OBV vs EMA21,Volume,All,280154,49.3,50.1,84831,79438,51.6,50.0,1.6,13.07,0.019
+OBV vs EMA21,Volume,Forward,24624,48.5,50.1,7241,7070,50.6,50.0,0.6,1.51,-0.015
+OBV vs EMA21,Volume,Intraday,86588,49.4,50.1,25897,23880,52.0,50.1,2.0,8.73,0.013
+OBV vs EMA21,Volume,Position,21750,49.2,50.1,6501,6274,50.9,50.2,0.7,1.66,0.025
+OBV vs EMA21,Volume,Scalping,100998,49.7,50.3,30316,28614,51.4,50.2,1.3,6.08,0.014
+OBV vs EMA21,Volume,Swing,70818,48.6,50.0,22117,20670,51.7,50.0,1.7,6.99,0.031
+OVERALL strong verdict,Overall verdict,All,106011,49.2,50.1,34117,29993,53.2,50.0,3.2,16.19,0.057
+OVERALL strong verdict,Overall verdict,Forward,9412,48.7,50.0,3066,2685,53.3,50.0,3.3,4.99,0.048
+OVERALL strong verdict,Overall verdict,Intraday,33315,49.0,50.0,10782,9204,53.9,50.0,3.9,11.06,0.052
+OVERALL strong verdict,Overall verdict,Position,7921,48.4,50.4,2436,2373,50.7,50.2,0.4,0.58,0.049
+OVERALL strong verdict,Overall verdict,Scalping,37292,50.8,50.4,12007,10298,53.8,50.3,3.6,10.64,0.072
+OVERALL strong verdict,Overall verdict,Swing,27483,47.4,50.0,8892,8118,52.3,50.1,2.2,5.75,0.046
+OVERALL verdict [ADX 20-25],Overall verdict,All,41780,49.4,50.1,12944,11922,52.1,50.0,2.0,6.44,0.045
+OVERALL verdict [ADX 20-25],Overall verdict,Forward,3640,49.8,50.0,1165,1083,51.8,50.0,1.8,1.72,0.068
+OVERALL verdict [ADX 20-25],Overall verdict,Intraday,12894,49.0,50.0,3884,3725,51.0,49.9,1.1,1.93,-0.005
+OVERALL verdict [ADX 20-25],Overall verdict,Position,3393,50.9,50.6,1040,962,51.9,49.9,2.1,1.88,0.044
+OVERALL verdict [ADX 20-25],Overall verdict,Scalping,14691,50.4,50.1,4784,4131,53.7,50.1,3.5,6.68,0.109
+OVERALL verdict [ADX 20-25],Overall verdict,Swing,10802,48.2,50.0,3236,3104,51.0,50.0,1.1,1.70,0.017
+OVERALL verdict [ADX<20],Overall verdict,All,53477,48.6,50.1,16312,15961,50.5,50.0,0.5,1.81,0.016
+OVERALL verdict [ADX<20],Overall verdict,Forward,4429,46.5,50.1,1242,1407,46.9,49.9,-3.0,-3.13,-0.047
+OVERALL verdict [ADX<20],Overall verdict,Intraday,15638,49.0,50.0,4912,4540,52.0,50.0,2.0,3.89,0.071
+OVERALL verdict [ADX<20],Overall verdict,Position,4156,52.1,51.1,1191,1200,49.8,49.6,0.3,0.25,0.058
+OVERALL verdict [ADX<20],Overall verdict,Scalping,21077,47.6,50.2,6292,6508,49.2,50.1,-1.0,-2.20,-0.024
+OVERALL verdict [ADX<20],Overall verdict,Swing,12606,48.8,50.0,3917,3713,51.3,49.9,1.5,2.56,0.000
+OVERALL verdict [ADX>25],Overall verdict,All,121177,49.0,50.1,37493,33697,52.7,50.0,2.7,14.15,0.033
+OVERALL verdict [ADX>25],Overall verdict,Forward,10666,48.1,50.0,3268,2996,52.2,50.0,2.1,3.39,-0.014
+OVERALL verdict [ADX>25],Overall verdict,Intraday,38747,48.6,50.1,11887,10324,53.5,50.1,3.5,10.33,0.021
+OVERALL verdict [ADX>25],Overall verdict,Position,9406,48.4,50.2,2825,2743,50.7,50.3,0.5,0.67,0.028
+OVERALL verdict [ADX>25],Overall verdict,Scalping,41249,50.3,50.3,12640,11241,52.9,50.2,2.7,8.33,0.040
+OVERALL verdict [ADX>25],Overall verdict,Swing,31775,47.8,50.0,10141,9389,51.9,50.1,1.8,5.15,0.042
+OVERALL verdict,Overall verdict,All,216434,49.0,50.1,66749,61580,52.0,50.0,2.0,14.29,0.031
+OVERALL verdict,Overall verdict,Forward,18735,48.1,50.0,5675,5486,50.8,50.0,0.8,1.78,-0.006
+OVERALL verdict,Overall verdict,Intraday,67279,48.8,50.0,20683,18589,52.7,50.0,2.7,10.52,0.028
+OVERALL verdict,Overall verdict,Position,16955,49.8,50.5,5056,4905,50.8,50.0,0.7,1.47,0.039
+OVERALL verdict,Overall verdict,Scalping,77017,49.6,50.2,23716,21880,52.0,50.2,1.8,7.82,0.036
+OVERALL verdict,Overall verdict,Swing,55183,48.1,50.0,17294,16206,51.6,50.0,1.6,5.89,0.027
+Parabolic SAR,Trend,All,280154,49.2,50.0,83953,80316,51.1,50.0,1.1,8.94,0.013
+Parabolic SAR,Trend,Forward,24624,49.0,50.0,7163,7148,50.1,50.0,0.1,0.18,0.006
+Parabolic SAR,Trend,Intraday,86588,49.5,50.0,25767,24010,51.8,50.0,1.8,7.83,0.033
+Parabolic SAR,Trend,Position,21750,49.8,50.2,6505,6270,50.9,50.0,0.9,2.01,0.018
+Parabolic SAR,Trend,Scalping,100998,49.4,50.1,29909,29021,50.8,50.1,0.7,3.41,0.005
+Parabolic SAR,Trend,Swing,70818,48.6,50.0,21772,21015,50.9,50.0,0.9,3.60,-0.002
+ROC (12),Momentum / oscillators,All,279081,49.3,50.0,84432,79229,51.6,50.0,1.6,12.83,0.028
+ROC (12),Momentum / oscillators,Forward,24514,48.4,50.0,7109,7139,49.9,50.0,-0.1,-0.25,0.013
+ROC (12),Momentum / oscillators,Intraday,86280,49.2,50.0,25882,23740,52.2,50.0,2.2,9.65,0.035
+ROC (12),Momentum / oscillators,Position,21742,49.1,50.2,6475,6295,50.7,50.2,0.5,1.23,0.012
+ROC (12),Momentum / oscillators,Scalping,100352,49.7,50.1,30195,28362,51.6,50.1,1.5,7.03,0.029
+ROC (12),Momentum / oscillators,Swing,70707,48.8,50.0,21880,20832,51.2,50.0,1.2,4.93,0.022
+RSI (14),Momentum / oscillators,All,31452,49.2,49.9,9479,11270,45.7,50.0,-4.3,-12.44,-0.137
+RSI (14),Momentum / oscillators,Forward,2949,48.3,49.8,855,1041,45.1,50.1,-5.0,-4.32,-0.033
+RSI (14),Momentum / oscillators,Intraday,10398,49.9,50.0,3100,3802,44.9,50.0,-5.1,-8.42,-0.130
+RSI (14),Momentum / oscillators,Position,2198,51.0,50.3,695,786,46.9,49.2,-2.3,-1.76,-0.155
+RSI (14),Momentum / oscillators,Scalping,10579,46.7,49.5,3113,3705,45.7,49.7,-4.0,-6.67,-0.128
+RSI (14),Momentum / oscillators,Swing,8277,51.1,50.0,2571,2977,46.3,49.9,-3.5,-5.23,-0.152
+SMA 100,Trend,All,280154,49.4,50.1,84716,79553,51.6,50.0,1.5,12.50,0.029
+SMA 100,Trend,Forward,24624,48.9,50.0,7295,7016,51.0,50.0,1.0,2.33,-0.014
+SMA 100,Trend,Intraday,86588,49.6,50.0,25921,23856,52.1,50.0,2.0,9.07,0.037
+SMA 100,Trend,Position,21750,50.1,50.5,6382,6393,50.0,49.9,0.1,0.15,0.021
+SMA 100,Trend,Scalping,100998,49.5,50.2,30367,28563,51.5,50.2,1.4,6.66,0.029
+SMA 100,Trend,Swing,70818,48.9,50.0,22046,20741,51.5,50.0,1.5,6.37,0.021
+SMA 10,Trend,All,280154,48.9,50.0,84874,79395,51.7,50.0,1.7,13.49,0.018
+SMA 10,Trend,Forward,24624,50.2,50.0,7503,6808,52.4,50.0,2.4,5.83,0.045
+SMA 10,Trend,Intraday,86588,48.6,50.0,25765,24012,51.8,50.0,1.8,7.89,0.025
+SMA 10,Trend,Position,21750,49.3,50.2,6476,6299,50.7,50.0,0.7,1.48,-0.003
+SMA 10,Trend,Scalping,100998,49.4,50.1,30665,28265,52.0,50.1,2.0,9.49,0.022
+SMA 10,Trend,Swing,70818,48.4,50.0,21968,20819,51.3,50.0,1.3,5.46,0.013
+SMA 200,Trend,All,257032,50.0,50.1,78188,72389,51.9,50.0,1.9,14.58,0.053
+SMA 200,Trend,Forward,24390,49.2,50.1,7333,6849,51.7,50.0,1.7,4.14,0.024
+SMA 200,Trend,Intraday,80496,49.9,50.1,24157,22063,52.3,50.1,2.2,9.36,0.063
+SMA 200,Trend,Position,17045,51.2,50.8,4798,4921,49.4,49.6,-0.2,-0.49,0.013
+SMA 200,Trend,Scalping,94667,50.2,50.4,28836,26555,52.1,50.3,1.8,8.52,0.056
+SMA 200,Trend,Swing,64824,49.5,50.0,20397,18850,52.0,50.0,2.0,7.75,0.046
+SMA 20,Trend,All,280154,49.0,50.1,85006,79263,51.7,50.0,1.7,14.12,0.027
+SMA 20,Trend,Forward,24624,48.4,50.0,7183,7128,50.2,50.0,0.2,0.49,0.015
+SMA 20,Trend,Intraday,86588,49.1,50.0,26116,23661,52.5,50.0,2.5,11.03,0.041
+SMA 20,Trend,Position,21750,49.4,50.3,6456,6319,50.5,50.1,0.5,1.02,0.015
+SMA 20,Trend,Scalping,100998,49.5,50.1,30447,28483,51.7,50.1,1.5,7.47,0.025
+SMA 20,Trend,Swing,70818,48.3,50.0,21987,20800,51.4,50.0,1.3,5.58,0.014
+SMA 30,Trend,All,280154,48.9,50.1,84689,79580,51.6,50.0,1.5,12.52,0.023
+SMA 30,Trend,Forward,24624,48.0,50.0,7211,7100,50.4,50.0,0.4,0.94,-0.009
+SMA 30,Trend,Intraday,86588,48.9,50.0,26035,23742,52.3,50.0,2.3,10.30,0.022
+SMA 30,Trend,Position,21750,50.1,50.3,6579,6196,51.5,50.1,1.4,3.24,0.046
+SMA 30,Trend,Scalping,100998,49.3,50.2,30255,28675,51.3,50.1,1.2,5.80,0.022
+SMA 30,Trend,Swing,70818,48.1,50.0,21820,20967,51.0,50.0,1.0,4.02,0.017
+SMA 50,Trend,All,280154,49.2,50.1,84825,79444,51.6,50.0,1.6,13.13,0.027
+SMA 50,Trend,Forward,24624,48.2,50.0,7233,7078,50.5,50.0,0.5,1.26,-0.041
+SMA 50,Trend,Intraday,86588,49.0,50.0,25968,23809,52.2,50.0,2.2,9.64,0.019
+SMA 50,Trend,Position,21750,51.0,50.3,6643,6132,52.0,50.1,1.9,4.38,0.080
+SMA 50,Trend,Scalping,100998,49.3,50.2,30177,28753,51.2,50.1,1.1,5.19,0.019
+SMA 50,Trend,Swing,70818,48.5,50.0,22037,20750,51.5,50.0,1.5,6.25,0.032
+Squeeze Momentum,Breakout / volatility,All,152594,48.4,50.1,47697,44341,51.8,50.0,1.8,11.01,0.030
+Squeeze Momentum,Breakout / volatility,Forward,13383,49.1,50.0,4106,3872,51.5,50.0,1.5,2.68,0.028
+Squeeze Momentum,Breakout / volatility,Intraday,47005,48.4,50.0,14666,13290,52.5,50.0,2.5,8.27,0.055
+Squeeze Momentum,Breakout / volatility,Position,11971,48.7,50.3,3588,3547,50.3,50.1,0.2,0.33,0.002
+Squeeze Momentum,Breakout / volatility,Scalping,55444,48.9,50.1,17118,15898,51.8,50.1,1.7,6.24,0.021
+Squeeze Momentum,Breakout / volatility,Swing,38174,47.6,50.0,12325,11606,51.5,50.0,1.5,4.58,0.019
+"Stochastic (14,3)",Momentum / oscillators,All,110021,50.3,49.9,31876,34883,47.7,50.0,-2.2,-11.58,-0.047
+"Stochastic (14,3)",Momentum / oscillators,Forward,10009,49.3,49.9,2948,3133,48.5,50.1,-1.6,-2.48,-0.078
+"Stochastic (14,3)",Momentum / oscillators,Intraday,33896,50.3,50.0,9614,10979,46.7,50.0,-3.3,-9.58,-0.085
+"Stochastic (14,3)",Momentum / oscillators,Position,8017,50.1,49.4,2410,2480,49.3,50.0,-0.7,-1.00,-0.007
+"Stochastic (14,3)",Momentum / oscillators,Scalping,40487,49.5,49.9,11503,12423,48.1,49.9,-1.8,-5.58,-0.036
+"Stochastic (14,3)",Momentum / oscillators,Swing,27621,51.7,50.0,8349,9001,48.1,50.0,-1.9,-4.95,-0.028
+Stochastic RSI,Momentum / oscillators,All,140764,50.2,50.0,40282,42595,48.6,50.0,-1.4,-8.04,-0.029
+Stochastic RSI,Momentum / oscillators,Forward,12787,48.1,49.9,3515,3928,47.2,50.0,-2.8,-4.87,-0.157
+Stochastic RSI,Momentum / oscillators,Intraday,43611,50.5,50.0,12209,12995,48.4,50.0,-1.6,-4.96,-0.031
+Stochastic RSI,Momentum / oscillators,Position,11231,52.2,49.7,3363,3251,50.8,50.0,0.9,1.41,0.080
+Stochastic RSI,Momentum / oscillators,Scalping,49866,48.7,50.0,14026,15046,48.2,50.0,-1.7,-5.88,-0.062
+Stochastic RSI,Momentum / oscillators,Swing,36056,51.1,50.0,10684,11303,48.6,50.0,-1.4,-4.11,-0.014
+"Supertrend (10,3)",Trend,All,280154,49.2,50.1,83766,80503,51.0,50.0,1.0,7.93,0.011
+"Supertrend (10,3)",Trend,Forward,24624,48.0,50.0,7151,7160,50.0,50.0,-0.0,-0.11,-0.040
+"Supertrend (10,3)",Trend,Intraday,86588,48.8,50.0,25403,24374,51.0,50.0,1.0,4.63,-0.016
+"Supertrend (10,3)",Trend,Position,21750,49.8,50.4,6493,6282,50.8,49.9,0.9,1.99,0.059
+"Supertrend (10,3)",Trend,Scalping,100998,49.6,50.1,30024,28906,50.9,50.1,0.8,4.06,0.008
+"Supertrend (10,3)",Trend,Swing,70818,48.8,50.0,21846,20941,51.1,50.0,1.1,4.40,0.035
+Support / Resistance,Support / resistance,All,178538,49.4,49.7,51796,52461,49.7,49.9,-0.2,-1.40,-0.003
+Support / Resistance,Support / resistance,Forward,14774,49.7,49.7,4411,4445,49.8,50.1,-0.3,-0.64,-0.032
+Support / Resistance,Support / resistance,Intraday,55476,49.1,49.9,15531,16033,49.2,49.8,-0.6,-2.05,-0.023
+Support / Resistance,Support / resistance,Position,14392,49.5,49.4,4216,4214,50.0,50.4,-0.4,-0.80,-0.008
+Support / Resistance,Support / resistance,Scalping,61335,49.3,49.6,17761,18073,49.6,49.7,-0.1,-0.54,-0.017
+Support / Resistance,Support / resistance,Swing,47335,50.0,50.0,14288,14141,50.3,50.2,0.1,0.27,0.041
+TRIX (15),Trend,All,280154,49.5,50.1,84033,80236,51.2,50.0,1.1,9.16,0.019
+TRIX (15),Trend,Forward,24624,48.5,50.0,7126,7185,49.8,50.0,-0.2,-0.55,-0.036
+TRIX (15),Trend,Intraday,86588,49.4,50.0,25650,24127,51.5,50.0,1.5,6.74,0.006
+TRIX (15),Trend,Position,21750,51.1,50.3,6647,6128,52.0,50.0,2.0,4.63,0.081
+TRIX (15),Trend,Scalping,100998,49.4,50.2,29756,29174,50.5,50.2,0.3,1.66,0.011
+TRIX (15),Trend,Swing,70818,49.3,50.0,21980,20807,51.4,50.0,1.4,5.78,0.027
+Ultimate Oscillator,Momentum / oscillators,All,9107,49.2,50.2,2821,3087,47.7,50.1,-2.3,-3.58,-0.060
+Ultimate Oscillator,Momentum / oscillators,Forward,959,44.4,50.3,235,294,44.4,49.8,-5.4,-2.50,-0.153
+Ultimate Oscillator,Momentum / oscillators,Intraday,3001,49.3,50.1,888,1061,45.6,50.2,-4.7,-4.11,-0.137
+Ultimate Oscillator,Momentum / oscillators,Position,429,46.4,49.4,132,142,48.2,49.7,-1.5,-0.51,-0.119
+Ultimate Oscillator,Momentum / oscillators,Scalping,3352,48.5,50.2,1027,1084,48.6,50.1,-1.5,-1.33,-0.009
+Ultimate Oscillator,Momentum / oscillators,Swing,2325,50.5,50.0,774,800,49.2,49.8,-0.7,-0.52,-0.023
+VWAP (50),Volume,All,280154,49.2,50.1,84185,80084,51.2,50.0,1.2,9.92,0.023
+VWAP (50),Volume,Forward,24624,48.9,50.0,7304,7007,51.0,50.0,1.0,2.49,0.011
+VWAP (50),Volume,Intraday,86588,49.0,50.0,25854,23923,51.9,50.0,1.9,8.49,0.017
+VWAP (50),Volume,Position,21750,50.8,50.5,6549,6226,51.3,50.0,1.3,2.95,0.063
+VWAP (50),Volume,Scalping,100998,49.4,50.2,29959,28971,50.8,50.1,0.7,3.52,0.017
+VWAP (50),Volume,Swing,70818,48.6,50.0,21823,20964,51.0,50.0,1.0,4.30,0.027
+VWMA (20),Volume,All,280154,49.2,50.1,84935,79334,51.7,50.0,1.7,13.73,0.027
+VWMA (20),Volume,Forward,24624,48.4,50.0,7164,7147,50.1,50.0,0.1,0.19,0.020
+VWMA (20),Volume,Intraday,86588,49.4,50.0,26050,23727,52.3,50.0,2.3,10.39,0.040
+VWMA (20),Volume,Position,21750,49.5,50.4,6424,6351,50.3,50.0,0.3,0.63,0.014
+VWMA (20),Volume,Scalping,100998,49.6,50.1,30443,28487,51.7,50.1,1.6,7.53,0.028
+VWMA (20),Volume,Swing,70818,48.4,50.0,22018,20769,51.5,50.0,1.4,5.99,0.014
+Vortex (14),Trend,All,247398,49.3,50.0,75213,70258,51.7,50.0,1.7,12.96,0.031
+Vortex (14),Trend,Forward,21763,47.9,50.0,6294,6438,49.4,50.0,-0.6,-1.27,0.012
+Vortex (14),Trend,Intraday,76307,49.5,50.0,23285,20825,52.8,50.0,2.8,11.73,0.046
+Vortex (14),Trend,Position,19189,49.5,50.2,5789,5537,51.1,50.2,0.9,1.94,0.050
+Vortex (14),Trend,Scalping,89493,49.6,50.2,26835,25475,51.3,50.1,1.2,5.32,0.025
+Vortex (14),Trend,Swing,62409,48.5,50.0,19304,18421,51.2,50.1,1.1,4.35,0.015
+Williams %R (14),Momentum / oscillators,All,110022,50.3,49.9,31876,34883,47.7,50.0,-2.2,-11.58,-0.047
+Williams %R (14),Momentum / oscillators,Forward,10009,49.3,49.9,2948,3133,48.5,50.1,-1.6,-2.48,-0.078
+Williams %R (14),Momentum / oscillators,Intraday,33896,50.3,50.0,9614,10979,46.7,50.0,-3.3,-9.58,-0.085
+Williams %R (14),Momentum / oscillators,Position,8017,50.1,49.4,2410,2480,49.3,50.0,-0.7,-1.00,-0.007
+Williams %R (14),Momentum / oscillators,Scalping,40487,49.5,49.9,11503,12423,48.1,49.9,-1.8,-5.58,-0.036
+Williams %R (14),Momentum / oscillators,Swing,27622,51.7,50.0,8349,9001,48.1,50.0,-1.9,-4.95,-0.028
+MARKET (all coins),Market,All,280154,48.6 up,,81195 up first,83074 down first,,,,,
+MARKET (all coins),Market,Forward,24624,48.4 up,,7268 up first,7043 down first,,,,,
+MARKET (all coins),Market,Intraday,86588,49.2 up,,24278 up first,25499 down first,,,,,
+MARKET (all coins),Market,Position,21750,46.6 up,,6690 up first,6085 down first,,,,,
+MARKET (all coins),Market,Scalping,100998,47.6 up,,28437 up first,30493 down first,,,,,
+MARKET (all coins),Market,Swing,70818,49.9 up,,21790 up first,20997 down first,,,,,
